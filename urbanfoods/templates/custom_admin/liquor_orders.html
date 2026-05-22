@@ -3,7 +3,7 @@
 
 {% block title %}Liquor Orders - Tipsy Theoryy Admin{% endblock %}
 
-{% block page_title %}Liquor Order Management{% endblock %}
+{% block page_title %}{% endblock %}
 
 {% block breadcrumb_active %}Liquor Orders{% endblock %}
 
@@ -232,7 +232,7 @@
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h4 class="mb-0" style="color: #2d3748;">🍷 Liquor Order Management</h4>
+    <h4 class="mb-0" style="color: #2d3748;"></h4>
     <form class="d-flex gap-2" method="get" action="{% url 'liquor_orders' %}">
         <select class="form-select" id="statusFilter" name="status">
             <option value="all"             {% if status_filter == 'all' %}selected{% endif %}>All Orders</option>

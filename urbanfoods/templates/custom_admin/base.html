@@ -4,7 +4,7 @@
 <head>
     {% block extrastyle %}{% endblock %}
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
     <title>{% block title %}Tipsy Theoryy Admin Panel{% endblock %}</title>
 
     <link rel="icon" type="image/png" href="{% static 'images/favicon.png' %}">
@@ -365,6 +365,18 @@
             vertical-align: middle;
         }
 
+        /* Table responsive styles for all screen sizes */
+        .table-responsive {
+            display: block;
+            width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .table-responsive > .table {
+            margin-bottom: 0;
+        }
+
         .loading-spinner {
             display: inline-block;
             width: 24px;
@@ -456,39 +468,32 @@
 
             .admin-card .card-body {
                 padding: 16px;
+                overflow-x: auto;
+            }
+
+            /* Table scrolling on mobile */
+            .table-responsive {
+                display: block !important;
+                width: 100%;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            .table-responsive > .table {
+                min-width: 500px;
+                margin-bottom: 0;
             }
 
             .table-admin {
-                font-size: 0.8rem;
-                overflow-x: auto;
-                display: block;
-            }
-
-            .table-admin thead,
-            .table-admin tbody,
-            .table-admin tr {
-                display: block;
-                width: 100%;
+                font-size: 0.85rem;
+                min-width: 600px;
             }
 
             .table-admin thead th,
             .table-admin tbody td {
-                display: block;
-                width: 100%;
-                text-align: right;
                 padding: 12px 8px;
                 font-size: 0.875rem;
-                position: relative;
-                padding-left: 50%;
-            }
-
-            .table-admin thead th:before,
-            .table-admin tbody td:before {
-                content: attr(data-label);
-                position: absolute;
-                left: 6px;
-                font-weight: bold;
-                text-align: left;
+                white-space: nowrap;
             }
 
         .form-label, .form-check-label {
@@ -994,28 +999,8 @@
             lastTouchEnd = now;
         }, false);
 
-        // Prevent horizontal scroll
-        document.addEventListener('touchmove', function(e) {
-            if (e.touches.length > 1) return;
-            let scrollableElement = e.target;
-            while (scrollableElement && scrollableElement !== document.body) {
-                if (scrollableElement.scrollWidth > scrollableElement.clientWidth ||
-                    scrollableElement.scrollHeight > scrollableElement.clientHeight) {
-                    return;
-                }
-                scrollableElement = scrollableElement.parentElement;
-            }
-            e.preventDefault();
-        }, { passive: false });
-
-        // Ensure viewport stays at original zoom level
-        if (navigator.userAgent.match(/iPhone|iPad|Android/)) {
-            document.addEventListener('touchmove', function(e) {
-                if (e.touches.length > 1) {
-                    e.preventDefault();
-                }
-            }, false);
-        }
+        // Allow table and content scrolling on mobile
+        // Users can scroll horizontally on tables and pinch-zoom for accessibility
 
         // Sidebar toggle for mobile
         function toggleSidebar() {
