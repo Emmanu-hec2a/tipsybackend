@@ -689,12 +689,36 @@ def liquor_order_detail(request, order_number):
 @staff_member_required(login_url='admin_login')
 def liquor_analytics(request):
     """Liquor analytics and reports"""
-    days = int(request.GET.get('days', 7))
-    start_date = timezone.now() - timedelta(days=days)
+    # Date range - support both preset and custom dates
+    days = request.GET.get('days', '7')
+    from_date_str = request.GET.get('from_date')
+    to_date_str = request.GET.get('to_date')
+    
+    # Handle custom date range
+    if from_date_str and to_date_str:
+        try:
+            from_date_obj = datetime.strptime(from_date_str, '%Y-%m-%d').date()
+            to_date_obj = datetime.strptime(to_date_str, '%Y-%m-%d').date()
+            start_date = timezone.make_aware(datetime.combine(from_date_obj, datetime.min.time()))
+            end_date = timezone.make_aware(datetime.combine(to_date_obj, datetime.max.time()))
+            days = 'custom'
+        except (ValueError, TypeError):
+            # Fall back to preset days
+            days = int(days)
+            start_date = timezone.now() - timedelta(days=days)
+            end_date = timezone.now()
+    else:
+        try:
+            days = int(days)
+        except (ValueError, TypeError):
+            days = 7
+        start_date = timezone.now() - timedelta(days=days)
+        end_date = timezone.now()
 
     # Delivered/completed liquor orders in the period
     delivered_orders = Order.objects.filter(
         created_at__gte=start_date,
+        created_at__lte=end_date,
         status__in=['delivered', 'completed'],
         items__food_item__store_type='liquor'
     ).distinct()
@@ -732,6 +756,7 @@ def liquor_analytics(request):
     # Liquor order status distribution (all statuses)
     status_distribution = Order.objects.filter(
         created_at__gte=start_date,
+        created_at__lte=end_date,
         items__food_item__store_type='liquor'
     ).values('status').annotate(
         count=Count('id')
@@ -756,6 +781,10 @@ def liquor_analytics(request):
     ).aggregate(total=Sum('quantity'))['total'] or 0
     top_liquor_items = top_items
     liquor_daily_revenue = daily_revenue
+    
+    # Format dates for display
+    from_date_display = start_date.date().isoformat() if hasattr(start_date, 'date') else str(start_date)
+    to_date_display = end_date.date().isoformat() if hasattr(end_date, 'date') else str(end_date)
 
     context = {
         'daily_revenue': json.dumps(list(daily_revenue), default=str),
@@ -763,6 +792,8 @@ def liquor_analytics(request):
         'top_customers': json.dumps(list(top_customers), default=str),
         'status_distribution': json.dumps(list(status_distribution), default=str),
         'days': days,
+        'from_date': from_date_display,
+        'to_date': to_date_display,
         'total_revenue': total_revenue,
         'total_orders': total_orders,
         'avg_order_value': avg_order_value,
@@ -1104,10 +1135,10 @@ def admin_analytics(request):
     # Handle custom date range
     if from_date_str and to_date_str:
         try:
-            start_date = timezone.datetime.strptime(from_date_str, '%Y-%m-%d').date()
-            end_date = timezone.datetime.strptime(to_date_str, '%Y-%m-%d').date()
-            start_date = timezone.make_aware(timezone.datetime.combine(start_date, timezone.datetime.min.time()))
-            end_date = timezone.make_aware(timezone.datetime.combine(end_date, timezone.datetime.max.time()))
+            from_date_obj = datetime.strptime(from_date_str, '%Y-%m-%d').date()
+            to_date_obj = datetime.strptime(to_date_str, '%Y-%m-%d').date()
+            start_date = timezone.make_aware(datetime.combine(from_date_obj, datetime.min.time()))
+            end_date = timezone.make_aware(datetime.combine(to_date_obj, datetime.max.time()))
             days = 'custom'
         except (ValueError, TypeError):
             # Fall back to preset days
@@ -1115,7 +1146,10 @@ def admin_analytics(request):
             start_date = timezone.now() - timedelta(days=days)
             end_date = timezone.now()
     else:
-        days = int(days)
+        try:
+            days = int(days)
+        except (ValueError, TypeError):
+            days = 7
         start_date = timezone.now() - timedelta(days=days)
         end_date = timezone.now()
 
@@ -1251,8 +1285,8 @@ def admin_analytics(request):
     )
 
     # Format dates for display
-    from_date_display = start_date.strftime('%Y-%m-%d') if isinstance(start_date, datetime) else start_date
-    to_date_display = end_date.strftime('%Y-%m-%d') if isinstance(end_date, datetime) else end_date
+    from_date_display = start_date.date().isoformat() if hasattr(start_date, 'date') else str(start_date)
+    to_date_display = end_date.date().isoformat() if hasattr(end_date, 'date') else str(end_date)
 
     context = {
         'daily_revenue': json.dumps(list(daily_revenue), default=str),
