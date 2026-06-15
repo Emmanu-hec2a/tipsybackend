@@ -57,43 +57,15 @@
                             </div>
                         </td>
                         <td class="text-end">
-                            <div class="btn-group btn-group-sm" role="group">
-                                <a href="{% url 'delivery_guy_dashboard' item.guy.id %}" class="btn btn-outline-primary">
-                                    <i class="fas fa-eye"></i>
-                                </a>
-                                <button class="btn btn-outline-secondary btn-edit-delivery-guy" data-delivery-guy-id="{{ item.guy.id }}" data-name="{{ item.guy.name|escapejs }}" data-phone="{{ item.guy.phone_number|escapejs }}" data-active="{{ item.guy.is_active|lower }}">
-                                    <i class="fas fa-edit"></i>
-                                </button>
-                                <div class="dropdown">
-                                    <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                                        <i class="fas fa-ellipsis-v"></i>
-                                    </button>
-                                    <ul class="dropdown-menu dropdown-menu-end">
-                                        {% if not item.is_paid_this_week %}
-                                        <li>
-                                            <button class="dropdown-item btn-mark-paid" data-delivery-guy-id="{{ item.guy.id }}" data-delivery-guy-name="{{ item.guy.name|escapejs }}">
-                                                <i class="fas fa-check-circle text-success me-2"></i>Mark Paid (This Week)
-                                            </button>
-                                        </li>
-                                        <li><hr class="dropdown-divider"></li>
-                                        {% endif %}
-                                        <li>
-                                            <button class="dropdown-item btn-toggle-status" data-delivery-guy-id="{{ item.guy.id }}" data-is-active="{{ item.guy.is_active|lower }}">
-                                                {% if item.guy.is_active %}
-                                                    <i class="fas fa-ban text-danger me-2"></i>Deactivate
-                                                {% else %}
-                                                    <i class="fas fa-check text-success me-2"></i>Activate
-                                                {% endif %}
-                                            </button>
-                                        </li>
-                                        <li>
-                                            <button class="dropdown-item text-danger btn-delete-delivery-guy" data-delivery-guy-id="{{ item.guy.id }}" data-name="{{ item.guy.name|escapejs }}">
-                                                <i class="fas fa-trash me-2"></i>Delete
-                                            </button>
-                                        </li>
-                                    </ul>
-                                </div>
-                            </div>
+                            <!--
+                                FIX: removed the ellipsis dropdown (Mark Paid /
+                                Activate / Deactivate). Those actions now live
+                                on the delivery guy's dashboard page, reached
+                                via this View button.
+                            -->
+                            <a href="{% url 'delivery_guy_dashboard' item.guy.id %}" class="btn btn-outline-primary btn-sm">
+                                <i class="fas fa-eye me-1"></i>View
+                            </a>
                         </td>
                     </tr>
                     {% empty %}
@@ -122,17 +94,17 @@
             <form id="deliveryGuyForm">
                 <div class="modal-body">
                     <input type="hidden" id="deliveryGuyId">
-                    
+
                     <div class="mb-3">
                         <label for="deliveryGuyName" class="form-label">Name <span class="text-danger">*</span></label>
                         <input type="text" class="form-control" id="deliveryGuyName" required>
                     </div>
-                    
+
                     <div class="mb-3">
                         <label for="deliveryGuyPhone" class="form-label">Phone Number <span class="text-danger">*</span></label>
                         <input type="tel" class="form-control" id="deliveryGuyPhone" required>
                     </div>
-                    
+
                     <div class="mb-3">
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="deliveryGuyActive" checked>
@@ -176,17 +148,17 @@ const deliveryGuyForm = document.getElementById('deliveryGuyForm');
 if (deliveryGuyForm) {
     deliveryGuyForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        
+
         const deliveryGuyId = document.getElementById('deliveryGuyId').value;
         const name = document.getElementById('deliveryGuyName').value;
         const phone = document.getElementById('deliveryGuyPhone').value;
         const isActive = document.getElementById('deliveryGuyActive').checked;
-        
+
         const method = deliveryGuyId ? 'PUT' : 'POST';
-        const url = deliveryGuyId 
+        const url = deliveryGuyId
             ? `/admin-panel/api/delivery-guys/${deliveryGuyId}/`
             : '/admin-panel/api/delivery-guys/add/';
-        
+
         try {
             const response = await fetch(url, {
                 method: method,
@@ -200,9 +172,9 @@ if (deliveryGuyForm) {
                     is_active: isActive
                 })
             });
-            
+
             const data = await response.json();
-            
+
             if (data.success) {
                 showToast(data.message, 'success');
                 setTimeout(() => location.reload(), 500);
@@ -214,29 +186,6 @@ if (deliveryGuyForm) {
         }
     });
 }
-
-
-// Edit button handler
-document.addEventListener('click', (e) => {
-    const editBtn = e.target.closest('.btn-edit-delivery-guy');
-    if (!editBtn) return;
-
-    const deliveryGuyId = editBtn.dataset.deliveryGuyId;
-    const name = editBtn.dataset.name;
-    const phone = editBtn.dataset.phone;
-    const isActive = editBtn.dataset.active === 'true';
-
-    const modalEl = document.getElementById('addDeliveryGuyModal');
-    if (!modalEl) return;
-
-    document.getElementById('deliveryGuyId').value = deliveryGuyId;
-    document.getElementById('deliveryGuyName').value = name;
-    document.getElementById('deliveryGuyPhone').value = phone;
-    document.getElementById('deliveryGuyActive').checked = isActive;
-    document.getElementById('modalTitle').textContent = 'Edit Delivery Guy';
-
-    new bootstrap.Modal(modalEl).show();
-});
 
 // Reset form when modal is hidden
 window.addEventListener('DOMContentLoaded', () => {
@@ -257,117 +206,10 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 });
 
-
-
-// Toggle status handler
-document.addEventListener('click', async (e) => {
-    if (e.target.closest('.btn-toggle-status')) {
-        const btn = e.target.closest('.btn-toggle-status');
-        const deliveryGuyId = btn.dataset.deliveryGuyId;
-        const isActive = btn.dataset.isActive === 'true';
-        
-        if (!confirm(`Are you sure you want to ${isActive ? 'deactivate' : 'activate'} this delivery guy?`)) {
-            return;
-        }
-        
-        try {
-            const response = await fetch(`/admin-panel/api/delivery-guys/${deliveryGuyId}/toggle-status/`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': csrfToken
-                },
-                body: JSON.stringify({
-                    is_active: !isActive
-                })
-            });
-            
-            const data = await response.json();
-            
-            if (data.success) {
-                showToast(data.message, 'success');
-                setTimeout(() => location.reload(), 500);
-            } else {
-                showToast(data.message || 'Error updating status', 'error');
-            }
-        } catch (error) {
-            showToast('Error updating status: ' + error.message, 'error');
-        }
-    }
-});
-
-// Mark as paid handler
-document.addEventListener('click', async (e) => {
-    if (e.target.closest('.btn-mark-paid')) {
-        const btn = e.target.closest('.btn-mark-paid');
-        const deliveryGuyId = btn.dataset.deliveryGuyId;
-        const deliveryGuyName = btn.dataset.deliveryGuyName;
-        
-        if (!confirm(`Mark ${deliveryGuyName} as paid for this week? This will reset their weekly delivery count to 0.`)) {
-            return;
-        }
-        
-        try {
-            const response = await fetch(`/admin-panel/api/delivery-guys/${deliveryGuyId}/mark-paid-weekly/`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': csrfToken
-                }
-            });
-            
-            const data = await response.json();
-            
-            if (data.success) {
-                showToast(data.message, 'success');
-                setTimeout(() => location.reload(), 500);
-            } else {
-                showToast(data.message || 'Error marking as paid', 'error');
-            }
-        } catch (error) {
-            showToast('Error marking as paid: ' + error.message, 'error');
-        }
-    }
-});
-
-// Delete handler
-document.addEventListener('click', async (e) => {
-    if (e.target.closest('.btn-delete-delivery-guy')) {
-        const btn = e.target.closest('.btn-delete-delivery-guy');
-        const deliveryGuyId = btn.dataset.deliveryGuyId;
-        const name = btn.dataset.name;
-        
-        if (!confirm(`Are you sure you want to delete "${name}"? This action cannot be undone.`)) {
-            return;
-        }
-        
-        try {
-            const response = await fetch(`/admin-panel/api/delivery-guys/${deliveryGuyId}/delete/`, {
-                method: 'DELETE',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': csrfToken
-                }
-            });
-            
-            const data = await response.json();
-            
-            if (data.success) {
-                showToast(data.message, 'success');
-                setTimeout(() => location.reload(), 500);
-            } else {
-                showToast(data.message || 'Error deleting delivery guy', 'error');
-            }
-        } catch (error) {
-            showToast('Error deleting delivery guy: ' + error.message, 'error');
-        }
-    }
-});
-
 // Toast notification
 function showToast(message, type = 'info') {
     let toast = document.getElementById('adminToast');
-    
+
     if (!toast) {
         toast = document.createElement('div');
         toast.id = 'adminToast';
@@ -375,11 +217,11 @@ function showToast(message, type = 'info') {
         toast.style.zIndex = '9999';
         document.body.appendChild(toast);
     }
-    
+
     toast.textContent = message;
     toast.className = `alert alert-${type} position-fixed bottom-0 end-0 m-3`;
     toast.style.display = 'block';
-    
+
     setTimeout(() => {
         toast.style.display = 'none';
     }, 3000);

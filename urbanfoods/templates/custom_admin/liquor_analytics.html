@@ -10,7 +10,15 @@
 {% block extra_css %}
 <style>
   /* Mobile responsiveness for analytics page */
-  
+  /* NOTE: base.html now defines block extra css  in <head>, so this block
+     renders correctly. Previously it was silently discarded by Django because
+     no matching block existed in base.html.
+
+     Also fixed: selectors like `> .d-flex.justify-content-between` are invalid
+     outside of a parent context (the `>` child combinator needs a left-hand
+     selector). These have been rewritten as plain descendant/class selectors
+     scoped to .container-fluid. */
+
   /* Tablet screens */
   @media (max-width: 768px) {
     .container-fluid {
@@ -19,7 +27,7 @@
     }
 
     /* Filter header improvements */
-    > .d-flex.justify-content-between {
+    .container-fluid > .d-flex.justify-content-between {
       flex-direction: column;
       gap: 12px;
     }
@@ -124,7 +132,7 @@
     }
 
     /* Filter header - stack everything */
-    > .d-flex.justify-content-between {
+    .container-fluid > .d-flex.justify-content-between {
       flex-direction: column;
       gap: 10px;
     }
@@ -266,11 +274,11 @@
         <option value="90" {% if days == 90 %}selected{% endif %}>Last 90 days</option>
         <option value="custom" {% if days == 'custom' %}selected{% endif %}>Custom Range</option>
       </select>
-      
+
       <div id="customDateRange" class="d-flex gap-2 w-100" {% if days != 'custom' %}style="display: none;"{% endif %}>
-        <input type="date" id="fromDate" class="form-control form-control-sm" placeholder="From" 
+        <input type="date" id="fromDate" class="form-control form-control-sm" placeholder="From"
                value="{{ from_date }}">
-        <input type="date" id="toDate" class="form-control form-control-sm" placeholder="To" 
+        <input type="date" id="toDate" class="form-control form-control-sm" placeholder="To"
                value="{{ to_date }}">
         <button class="btn btn-primary btn-sm" onclick="applyCustomDateRange()" style="white-space: nowrap;">
           <i class="fas fa-check me-1"></i>Apply
@@ -364,37 +372,6 @@
         </div>
     </div>
 </div>
-
-<!-- Top Items and Customers -->
-<!-- <div class="row mb-4"> -->
-    <!-- Top Selling Liquor Items -->
-    <!-- <div class="col-lg-6 mb-4">
-        <div class="admin-card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="fas fa-wine-bottle me-2"></i> Top Selling Liquor Items</h5>
-            </div>
-            <div class="card-body">
-                <div id="topItemsList"> -->
-                    <!-- Top liquor items will be populated by JavaScript -->
-                <!-- </div>
-            </div>
-        </div>
-    </div> -->
-
-    <!-- Top Liquor Customers -->
-    <!-- <div class="col-lg-6 mb-4">
-        <div class="admin-card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="fas fa-users me-2"></i> Top Liquor Customers</h5>
-            </div>
-            <div class="card-body">
-                <div id="topCustomersList"> -->
-                    <!-- Top liquor customers will be populated by JavaScript -->
-                <!-- </div>
-            </div>
-        </div>
-    </div>
-</div> -->
 
 <!-- Peak Hours -->
 <div class="admin-card">
@@ -548,62 +525,6 @@ function initializeCharts() {
         topItemName.textContent = topItemsData[0].food_item__name;
     } else {
         topItemName.textContent = 'N/A';
-    }
-
-    // Populate Top Items List
-    const topItemsList = document.getElementById('topItemsList');
-    if (topItemsData.length > 0) {
-        topItemsData.forEach(item => {
-            const itemDiv = document.createElement('div');
-            itemDiv.className = 'd-flex justify-content-between align-items-center p-3 mb-2 bg-light rounded';
-            itemDiv.innerHTML = `
-                <div>
-                    <h6 class="mb-1">${item.food_item__name}</h6>
-                    <small class="text-muted">${item.food_item__category__name} - ${item.food_item__bottle_size}</small>
-                </div>
-                <div class="text-end">
-                    <span class="badge bg-primary">${item.total_quantity} sold</span>
-                    <br>
-                    <small class="text-success fw-bold">KES ${parseFloat(item.total_revenue).toFixed(0)}</small>
-                </div>
-            `;
-            topItemsList.appendChild(itemDiv);
-        });
-    } else {
-        topItemsList.innerHTML = `
-            <div class="text-center py-4">
-                <i class="fas fa-wine-bottle fa-2x text-muted mb-2"></i>
-                <p class="text-muted mb-0">No liquor sales data available</p>
-            </div>
-        `;
-    }
-
-    // Populate Top Customers List
-    const topCustomersList = document.getElementById('topCustomersList');
-    if (topCustomersData.length > 0) {
-        topCustomersData.forEach(customer => {
-            const customerDiv = document.createElement('div');
-            customerDiv.className = 'd-flex justify-content-between align-items-center p-3 mb-2 bg-light rounded';
-            customerDiv.innerHTML = `
-                <div>
-                    <h6 class="mb-1">${customer.user__username}</h6>
-                    <small class="text-muted">${customer.user__phone_number}</small>
-                </div>
-                <div class="text-end">
-                    <span class="badge bg-success">${customer.total_orders} orders</span>
-                    <br>
-                    <small class="text-primary fw-bold">KES ${parseFloat(customer.total_spent).toFixed(0)}</small>
-                </div>
-            `;
-            topCustomersList.appendChild(customerDiv);
-        });
-    } else {
-        topCustomersList.innerHTML = `
-            <div class="text-center py-4">
-                <i class="fas fa-users fa-2x text-muted mb-2"></i>
-                <p class="text-muted mb-0">No liquor customer data available</p>
-            </div>
-        `;
     }
 }
 

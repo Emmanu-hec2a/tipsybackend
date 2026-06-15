@@ -11,18 +11,24 @@
     box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
 }
 
-/* Card enhancements */
-.admin-card {
-    border: none;
-    border-radius: 12px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    transition: all 0.3s ease;
-}
-
-.admin-card:hover {
-    box-shadow: 0 4px 15px rgba(0,0,0,0.15);
-    transform: translateY(-2px);
-}
+/*
+ * FIX: The old rules below redeclared `.admin-card` and `.stats-card`
+ * (including unguarded `:hover` transforms) with DIFFERENT styling than
+ * base.html's versions (different border-radius, different background —
+ * admin.css had .stats-card as a solid purple gradient block, while
+ * base.html has it as a white card with an icon).
+ *
+ * Because admin.css is <link>-ed BEFORE base.html's inline <style> block,
+ * base.html's rules win on equal specificity -- but the duplicate,
+ * unguarded `:hover { transform: ... }` rules here were still being parsed
+ * and could still apply to elements matching `.admin-card` / `.stats-card`
+ * on touch devices (no `(hover: hover)` guard), contributing to the
+ * "scroll effect" / elements jumping on scroll.
+ *
+ * These duplicate card/stats definitions have been removed entirely.
+ * `.admin-card` and `.stats-card` styling (including the proper
+ * hover-capable-device guard) now lives ONLY in base.html.
+ */
 
 /* Status badges */
 .status-badge {
@@ -73,8 +79,10 @@
     letter-spacing: 0.5px;
 }
 
-.admin-table tbody tr:hover {
-    background-color: #f8f9fa;
+@media (hover: hover) and (pointer: fine) {
+    .admin-table tbody tr:hover {
+        background-color: #f8f9fa;
+    }
 }
 
 /* Button enhancements */
@@ -84,9 +92,11 @@
     transition: all 0.3s ease;
 }
 
-.btn-admin:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+@media (hover: hover) and (pointer: fine) {
+    .btn-admin:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
 }
 
 /* Modal enhancements */
@@ -170,38 +180,6 @@
     margin-left: 0.25rem;
 }
 
-/* Stats cards */
-.stats-card {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border-radius: 12px;
-    padding: 1.5rem;
-    margin-bottom: 1rem;
-    transition: all 0.3s ease;
-}
-
-.stats-card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 8px 25px rgba(0,0,0,0.2);
-}
-
-.stats-card .icon {
-    font-size: 2rem;
-    opacity: 0.8;
-    margin-bottom: 0.5rem;
-}
-
-.stats-card .value {
-    font-size: 2rem;
-    font-weight: bold;
-    margin-bottom: 0.25rem;
-}
-
-.stats-card .label {
-    font-size: 0.9rem;
-    opacity: 0.9;
-}
-
 /* Quick actions */
 .quick-actions {
     display: grid;
@@ -210,23 +188,12 @@
     margin-top: 1rem;
 }
 
-.quick-action-card {
-    background: white;
-    border-radius: 8px;
-    padding: 1rem;
-    text-align: center;
-    text-decoration: none;
-    color: inherit;
-    transition: all 0.3s ease;
-    border: 1px solid #e9ecef;
-}
-
-.quick-action-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    border-color: #667eea;
-}
-
+/*
+ * NOTE: .quick-action-card base styling and its hover effect are also
+ * defined in base.html (with the proper hover-capable-device guard).
+ * Only the layout-only `.quick-actions` grid container and the
+ * non-conflicting `.icon` / `.title` helpers remain here.
+ */
 .quick-action-card .icon {
     font-size: 2rem;
     color: #667eea;
@@ -271,15 +238,6 @@
     transition: transform 0.3s ease;
 }
 
-.metric-card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
-}
-
-.metric-card:hover::before {
-    transform: translate(30%, -30%) scale(1.5);
-}
-
 .metric-card-icon {
     background: rgba(255, 255, 255, 0.2);
     backdrop-filter: blur(10px);
@@ -289,10 +247,6 @@
     align-items: center;
     justify-content: center;
     transition: all 0.3s ease;
-}
-
-.metric-card:hover .metric-card-icon {
-    transform: rotate(5deg) scale(1.1);
 }
 
 /* Gradient variations for metric cards */
@@ -312,6 +266,21 @@
     background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
 }
 
+@media (hover: hover) and (pointer: fine) {
+    .metric-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
+    }
+
+    .metric-card:hover::before {
+        transform: translate(30%, -30%) scale(1.5);
+    }
+
+    .metric-card:hover .metric-card-icon {
+        transform: rotate(5deg) scale(1.1);
+    }
+}
+
 /* Chart Card Enhancements */
 .chart-card {
     background: white;
@@ -319,10 +288,6 @@
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     overflow: hidden;
     transition: all 0.3s ease;
-}
-
-.chart-card:hover {
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
 }
 
 .chart-card-header {
@@ -341,8 +306,14 @@
     transition: all 0.3s ease;
 }
 
-.chart-card:hover .chart-card-header-icon {
-    transform: scale(1.1);
+@media (hover: hover) and (pointer: fine) {
+    .chart-card:hover {
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    }
+
+    .chart-card:hover .chart-card-header-icon {
+        transform: scale(1.1);
+    }
 }
 
 /* Icon gradient backgrounds */
@@ -377,17 +348,19 @@
     border-left: 3px solid transparent;
 }
 
-.list-item:hover {
-    border-left-color: #667eea;
-    transform: translateX(4px);
-}
-
 .list-item-badge {
     transition: all 0.2s ease;
 }
 
-.list-item:hover .list-item-badge {
-    transform: scale(1.05);
+@media (hover: hover) and (pointer: fine) {
+    .list-item:hover {
+        border-left-color: #667eea;
+        transform: translateX(4px);
+    }
+
+    .list-item:hover .list-item-badge {
+        transform: scale(1.05);
+    }
 }
 
 /* Customer Avatar Enhancement */
@@ -436,6 +409,13 @@
     overflow: hidden;
 }
 
+@media (hover: hover) and (pointer: fine) {
+    .export-btn:hover::before {
+        width: 300px;
+        height: 300px;
+    }
+}
+
 .export-btn::before {
     content: '';
     position: absolute;
@@ -447,11 +427,6 @@
     background: rgba(255, 255, 255, 0.2);
     transform: translate(-50%, -50%);
     transition: width 0.4s ease, height 0.4s ease;
-}
-
-.export-btn:hover::before {
-    width: 300px;
-    height: 300px;
 }
 
 /* Empty State Styling */
@@ -616,40 +591,18 @@
     }
 }
 
-/* Dark mode support */
-@media (prefers-color-scheme: dark) {
-    .admin-content {
-        background-color: #1a1a1a;
-        color: #ffffff;
-    }
-
-    .admin-card, .chart-card {
-        background-color: #2d2d2d;
-        color: #ffffff;
-        border-color: #374151;
-    }
-
-    .admin-table thead th {
-        background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
-    }
-
-    .admin-table tbody tr:hover {
-        background-color: #374151;
-    }
-
-    .chart-card-header {
-        background: linear-gradient(to right, #1f2937, #111827);
-        border-bottom-color: #374151;
-    }
-
-    .list-item:hover {
-        background-color: #374151;
-    }
-
-    .custom-scrollbar::-webkit-scrollbar-track {
-        background: #1f2937;
-    }
-}
+/*
+ * REMOVED: the old `@media (prefers-color-scheme: dark) { ... }` block here
+ * applied dark styling based on the OS theme, completely independent of
+ * the site's own `data-bs-theme="dark"` toggle in base.html. This caused a
+ * conflict: a user with the admin set to "Light" but an OS set to dark mode
+ * would still get dark-mode overrides from THIS file fighting against the
+ * light styles from base.html (and vice versa for "Dark" + light OS).
+ *
+ * All dark-mode styling is now handled exclusively via base.html's
+ * `[data-bs-theme="dark"]` selectors, which are driven by the in-app
+ * theme switcher (Light / Dark / System) -- the single source of truth.
+ */
 
 /* Print styles */
 @media print {
@@ -728,8 +681,10 @@
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.interactive-element:active {
-    transform: scale(0.98);
+@media (hover: hover) and (pointer: fine) {
+    .interactive-element:active {
+        transform: scale(0.98);
+    }
 }
 
 /* Glassmorphism Effect for Premium Look */
@@ -740,9 +695,8 @@
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
 }
 
-@media (prefers-color-scheme: dark) {
-    .glass-card {
-        background: rgba(45, 45, 45, 0.7);
-        border-color: rgba(255, 255, 255, 0.1);
-    }
-}
+/*
+ * REMOVED: prefers-color-scheme override for .glass-card -- same reasoning
+ * as above. If .glass-card needs a dark variant, add
+ * `[data-bs-theme="dark"] .glass-card { ... }` to base.html instead.
+ */

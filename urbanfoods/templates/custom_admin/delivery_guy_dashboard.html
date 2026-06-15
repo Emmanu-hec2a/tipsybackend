@@ -6,17 +6,46 @@
 {% block content %}
 <div class="admin-content">
     <div class="container-fluid py-4">
-        <!-- Header with Back Button -->
-        <div class="d-flex align-items-center mb-4">
-            <a href="{% url 'delivery_guys_list' %}" class="btn btn-sm btn-outline-secondary me-3">
+        <!-- Header with Back Button and Actions -->
+        <div class="d-flex align-items-start justify-content-between flex-wrap gap-3 mb-4">
+            <div class="d-flex align-items-center">
+                <a href="{% url 'delivery_guys_list' %}" class="btn btn-sm btn-outline-secondary me-3">
+                    <i class="fas fa-arrow-left me-2"></i>Back
+                </a>
+                <div>
+                    <h1 class="h2 mb-1"><i class="fas fa-user-tie text-primary me-2"></i>{{ delivery_guy.name }}</h1>
+                    <p class="text-muted mb-0">
+                        <i class="fas fa-phone text-primary me-2"></i>{{ delivery_guy.phone_number }}
+                    </p>
+                </div>
+            </div>
 
-                <i class="fas fa-arrow-left me-2"></i>Back
-            </a>
-            <div>
-                <h1 class="h2 mb-1"><i class="fas fa-user-tie text-primary me-2"></i>{{ delivery_guy.name }}</h1>
-                <p class="text-muted mb-0">
-                    <i class="fas fa-phone text-primary me-2"></i>{{ delivery_guy.phone_number }}
-                </p>
+            <!--
+                Action buttons (moved here from the ellipsis menu on the
+                Delivery Guys list page).
+            -->
+            <div class="d-flex flex-wrap gap-2">
+                {% if not is_paid_this_week %}
+                <button class="btn btn-success btn-sm btn-mark-paid"
+                        data-delivery-guy-id="{{ delivery_guy.id }}"
+                        data-delivery-guy-name="{{ delivery_guy.name|escapejs }}">
+                    <i class="fas fa-check-circle me-1"></i>Mark Paid (This Week)
+                </button>
+                {% else %}
+                <span class="badge bg-success align-self-center px-3 py-2">
+                    <i class="fas fa-check-circle me-1"></i>Paid This Week
+                </span>
+                {% endif %}
+
+                <button class="btn btn-sm btn-toggle-status {% if delivery_guy.is_active %}btn-outline-danger{% else %}btn-outline-success{% endif %}"
+                        data-delivery-guy-id="{{ delivery_guy.id }}"
+                        data-is-active="{{ delivery_guy.is_active|lower }}">
+                    {% if delivery_guy.is_active %}
+                        <i class="fas fa-ban me-1"></i>Deactivate
+                    {% else %}
+                        <i class="fas fa-check me-1"></i>Activate
+                    {% endif %}
+                </button>
             </div>
         </div>
 
@@ -56,7 +85,7 @@
                         <div class="d-flex justify-content-between align-items-start">
                             <div>
                                 <p class="card-text opacity-75 mb-1 small">Status</p>
-                                <h3 class="mb-0">
+                                <h3 class="mb-0" id="statusBadgeWrapper">
                                     {% if delivery_guy.is_active %}
                                         <span class="badge bg-success">Active</span>
                                     {% else %}
@@ -81,6 +110,28 @@
                             <i class="fas fa-chart-line fa-2x opacity-25"></i>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- This Week Summary -->
+        <div class="row g-4 mb-4">
+            <div class="col-md-6">
+                <div class="card border-0 shadow-sm">
+                    <!-- <div class="card-body">
+                        <h6 class="text-muted mb-2"><i class="fas fa-calendar-week me-2 text-primary"></i>This Week</h6>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <div class="fw-semibold">{{ this_week_deliveries }} deliveries</div>
+                                <div class="text-success">KES {{ this_week_revenue|floatformat:0 }}</div>
+                            </div>
+                            {% if is_paid_this_week %}
+                            <span class="badge bg-success">Paid</span>
+                            {% else %}
+                            <span class="badge bg-warning text-dark">Unpaid</span>
+                            {% endif %}
+                        </div>
+                    </div> -->
                 </div>
             </div>
         </div>
@@ -143,8 +194,29 @@
         </div>
     </div>
 </div>
+{% endblock %}
 
+{% block extra_js %}
 <script>
+    const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')
+        ? document.querySelector('[name=csrfmiddlewaretoken]').value
+        : getCookie('csrftoken');
+
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+
     // Calculate average per order
     document.addEventListener('DOMContentLoaded', function() {
         const totalRevenue = {{ total_revenue }};
@@ -152,6 +224,98 @@
         const avgPerOrder = totalDeliveries > 0 ? (totalRevenue / totalDeliveries).toFixed(2) : 0;
         document.getElementById('avgPerOrder').textContent = 'KES ' + Math.round(avgPerOrder).toLocaleString();
     });
+
+    // Toggle status handler
+    document.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.btn-toggle-status');
+        if (!btn) return;
+
+        const deliveryGuyId = btn.dataset.deliveryGuyId;
+        const isActive = btn.dataset.isActive === 'true';
+
+        if (!confirm(`Are you sure you want to ${isActive ? 'deactivate' : 'activate'} this delivery guy?`)) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/admin-panel/api/delivery-guys/${deliveryGuyId}/toggle-status/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                },
+                body: JSON.stringify({
+                    is_active: !isActive
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                showToast(data.message, 'success');
+                setTimeout(() => location.reload(), 500);
+            } else {
+                showToast(data.message || 'Error updating status', 'error');
+            }
+        } catch (error) {
+            showToast('Error updating status: ' + error.message, 'error');
+        }
+    });
+
+    // Mark as paid handler
+    document.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.btn-mark-paid');
+        if (!btn) return;
+
+        const deliveryGuyId = btn.dataset.deliveryGuyId;
+        const deliveryGuyName = btn.dataset.deliveryGuyName;
+
+        if (!confirm(`Mark ${deliveryGuyName} as paid for this week? This will reset their weekly delivery count to 0.`)) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/admin-panel/api/delivery-guys/${deliveryGuyId}/mark-paid-weekly/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                }
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                showToast(data.message, 'success');
+                setTimeout(() => location.reload(), 500);
+            } else {
+                showToast(data.message || 'Error marking as paid', 'error');
+            }
+        } catch (error) {
+            showToast('Error marking as paid: ' + error.message, 'error');
+        }
+    });
+
+    // Toast notification
+    function showToast(message, type = 'info') {
+        let toast = document.getElementById('adminToast');
+
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'adminToast';
+            toast.className = `alert alert-${type} position-fixed bottom-0 end-0 m-3`;
+            toast.style.zIndex = '9999';
+            document.body.appendChild(toast);
+        }
+
+        toast.textContent = message;
+        toast.className = `alert alert-${type} position-fixed bottom-0 end-0 m-3`;
+        toast.style.display = 'block';
+
+        setTimeout(() => {
+            toast.style.display = 'none';
+        }, 3000);
+    }
 </script>
 
 <style>

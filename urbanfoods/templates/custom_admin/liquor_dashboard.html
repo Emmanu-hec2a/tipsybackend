@@ -26,10 +26,16 @@
     </div>
 </div>
 
+<!--
+    NOTE: `.animate-card` no longer carries a slideInUp entrance animation
+    (see base.html). The class is kept on these elements for backwards
+    compatibility / styling hooks, but the per-card `animation-delay` inline
+    styles are no longer needed and have been removed.
+-->
 <div class="row g-4 mb-5">
     <!-- Today's Orders -->
     <div class="col-xl-3 col-md-6">
-        <div class="stats-card p-4 animate-card" style="animation-delay: 0.1s">
+        <div class="stats-card p-4 animate-card">
             <div class="d-flex align-items-center justify-content-between">
                 <div>
                     <div class="value">{{ today_orders_count }}</div>
@@ -44,7 +50,7 @@
 
     <!-- Today's Revenue -->
     <div class="col-xl-3 col-md-6">
-        <div class="stats-card p-4 animate-card" style="animation-delay: 0.2s">
+        <div class="stats-card p-4 animate-card">
             <div class="d-flex align-items-center justify-content-between">
                 <div>
                     <div class="value">KES {{ today_revenue|floatformat:0 }}</div>
@@ -59,7 +65,7 @@
 
     <!-- Pending Orders -->
     <div class="col-xl-3 col-md-6">
-        <div class="stats-card p-4 animate-card" style="animation-delay: 0.3s">
+        <div class="stats-card p-4 animate-card">
             <div class="d-flex align-items-center justify-content-between">
                 <div>
                     <div class="value">{{ pending_orders }}</div>
@@ -74,7 +80,7 @@
 
     <!-- Out for Delivery -->
     <div class="col-xl-3 col-md-6">
-        <div class="stats-card p-4 animate-card" style="animation-delay: 0.4s">
+        <div class="stats-card p-4 animate-card">
             <div class="d-flex align-items-center justify-content-between">
                 <div>
                     <div class="value">{{ out_for_delivery }}</div>
@@ -107,7 +113,7 @@
             </div>
         </div>
     </div>
-    
+
     <!-- Recent Activity -->
     <div class="col-lg-4 mb-4">
         <div class="admin-card">
@@ -127,87 +133,6 @@
         </div>
     </div>
 </div>
-
-<!-- Popular Items and Weekly Stats -->
-<!-- <div class="row mb-4"> -->
-    <!-- Popular Items Today -->
-    <!-- <div class="col-lg-6 mb-4">
-        <div class="admin-card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="fas fa-fire me-2"></i> Popular Liquor Items Today</h5>
-            </div>
-            <div class="card-body">
-                <div id="popularItemsList">
-                    {% for item in popular_today %}
-                    <div class="d-flex justify-content-between align-items-center p-3 mb-2 bg-light rounded">
-                        <div>
-                            <h6 class="mb-1">{{ item.food_item__name }}</h6>
-                            <small class="text-muted">{{ item.total_quantity }} bottles sold</small>
-                        </div>
-                        <div class="text-end">
-                            <span class="badge bg-success">KES {{ item.total_revenue|floatformat:0 }}</span>
-                        </div>
-                    </div>
-                    {% empty %}
-                    <div class="text-center py-4">
-                        <i class="fas fa-wine-bottle fa-2x text-muted mb-2"></i>
-                        <p class="text-muted mb-0">No liquor orders yet today</p>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-    </div> -->
-
-    <!-- Weekly Performance -->
-    <!-- <div class="col-lg-6 mb-4">
-        <div class="admin-card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="fas fa-calendar-week me-2"></i> This Week</h5>
-            </div>
-            <div class="card-body">
-                <div class="row g-3">
-                    <div class="col-12">
-                        <div class="p-3 bg-primary bg-opacity-10 rounded">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <div>
-                                    <small class="text-muted d-block">Total Orders</small>
-                                    <span class="h4 mb-0 text-primary">{{ weekly_orders }}</span>
-                                </div>
-                                <i class="fas fa-wine-bottle fa-2x text-primary opacity-75"></i>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-12">
-                        <div class="p-3 bg-success bg-opacity-10 rounded">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <div>
-                                    <small class="text-muted d-block">Total Revenue</small>
-                                    <span class="h4 mb-0 text-success">KES {{ weekly_revenue|floatformat:0 }}</span>
-                                </div>
-                                <i class="fas fa-dollar-sign fa-2x text-success opacity-75"></i>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-12">
-                        <div class="p-3 bg-warning bg-opacity-10 rounded">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <div>
-                                    <small class="text-muted d-block">Average Order Value</small>
-                                    <span class="h4 mb-0 text-warning">
-                                        KES {% if weekly_orders > 0 %}{{ average_order_value|floatformat:0 }}{% else %}0{% endif %}
-                                    </span>
-                                </div>
-                                <i class="fas fa-chart-line fa-2x text-warning opacity-75"></i>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div> -->
-
 {% endblock %}
 
 {% block extra_js %}
@@ -408,4 +333,3 @@ function updateStatsCards(data) {
 }
 </script>
 {% endblock %}
-

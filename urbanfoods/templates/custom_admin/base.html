@@ -22,6 +22,8 @@
     <!-- Custom Admin CSS -->
     <link rel="stylesheet" href="{% static 'admin.css' %}">
 
+    {% block extra_css %}{% endblock %}
+
     <style>
         /* Fix for mobile zoom issues */
         html, body {
@@ -96,13 +98,6 @@
             font-weight: 500;
         }
 
-        .admin-sidebar .nav-link:hover {
-            color: white;
-            background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
-            transform: translateX(8px) scale(1.02);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        }
-
         .admin-sidebar .nav-link.active {
             color: white;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -160,11 +155,6 @@
             right: 0;
             height: 4px;
             background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        }
-
-        .stats-card:hover {
-            transform: translateY(-8px) scale(1.02);
-            box-shadow: 0 12px 40px rgba(0,0,0,0.15);
         }
 
         .stats-card .icon {
@@ -242,17 +232,14 @@
             z-index: 2;
         }
 
+        /* FIX: previously this used opacity:0 + translateY(30px) initial state with a
+           one-shot keyframe animation. On pages with extra content/layout shifts,
+           browsers could repaint these mid-animation during scroll, making cards
+           appear to fade/slide as the user scrolled. The entrance animation is
+           removed; cards are simply visible from the start. */
         .animate-card {
-            animation: slideInUp 0.6s ease-out forwards;
-            opacity: 0;
-            transform: translateY(30px);
-        }
-
-        @keyframes slideInUp {
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+            opacity: 1;
+            transform: none;
         }
 
         @keyframes float-bg {
@@ -291,13 +278,6 @@
             box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
         }
 
-        .btn-admin-primary:hover {
-            background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
-        }
-
         .admin-card {
             background: white;
             border-radius: 16px;
@@ -310,14 +290,19 @@
             overflow-wrap: break-word;
         }
 
-        .admin-card:hover {
-            box-shadow: 0 8px 30px rgba(0,0,0,0.12);
-            transform: translateY(-2px);
-        }
-
-        .admin-card * {
+        /* FIX: the old `.admin-card * { overflow-x: auto; max-width: 100% }` rule
+           applied to EVERY descendant, including Bootstrap dropdown menus. That
+           clipped/squeezed open dropdowns (e.g. the ellipsis action menu) and made
+           them appear to "scroll" inside their cramped container. We scope the
+           overflow rule away from dropdown menus and their contents. */
+        .admin-card *:not(.dropdown-menu):not(.dropdown-menu *) {
             max-width: 100%;
             overflow-x: auto;
+        }
+
+        .admin-card .dropdown-menu {
+            max-width: none;
+            overflow: visible;
         }
 
         .admin-card .card-header {
@@ -352,11 +337,6 @@
 
         .table-admin tbody tr {
             transition: all 0.2s ease;
-        }
-
-        .table-admin tbody tr:hover {
-            background-color: #f8fafc;
-            transform: scale(1.01);
         }
 
         .table-admin td {
@@ -401,12 +381,6 @@
             border: 1px solid #e2e8f0;
         }
 
-        .quick-action-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-            border-color: #667eea;
-        }
-
         .quick-action-card .icon {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             border-radius: 12px;
@@ -424,6 +398,48 @@
             font-weight: 600;
             color: #2d3748;
             font-size: 0.875rem;
+        }
+
+        /* FIX: All hover-driven transform/scale "lift" effects are scoped to
+           devices that actually support real mouse hover. On touchscreens,
+           `:hover` can be triggered transiently by scroll/tap gestures, which
+           previously made stats cards, table rows, nav links, buttons, and
+           quick-action cards appear to animate/jump while the user scrolled. */
+        @media (hover: hover) and (pointer: fine) {
+            .admin-sidebar .nav-link:hover {
+                color: white;
+                background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
+                transform: translateX(8px) scale(1.02);
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            }
+
+            .stats-card:hover {
+                transform: translateY(-8px) scale(1.02);
+                box-shadow: 0 12px 40px rgba(0,0,0,0.15);
+            }
+
+            .btn-admin-primary:hover {
+                background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
+                color: white;
+                transform: translateY(-2px);
+                box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+            }
+
+            .admin-card:hover {
+                box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+                transform: translateY(-2px);
+            }
+
+            .table-admin tbody tr:hover {
+                background-color: #f8fafc;
+                transform: scale(1.01);
+            }
+
+            .quick-action-card:hover {
+                transform: translateY(-4px);
+                box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+                border-color: #667eea;
+            }
         }
 
         /* Enhanced mobile responsiveness */
@@ -496,18 +512,19 @@
                 white-space: nowrap;
             }
 
-        .form-label, .form-check-label {
-            font-weight: 600 !important;
-            color: #2d3748 !important;
-        }
+            .form-label, .form-check-label {
+                font-weight: 600 !important;
+                color: #2d3748 !important;
+            }
 
-        .form-check-input:checked {
-            background-color: #667eea !important;
-            border-color: #667eea !important;
-        }
+            .form-check-input:checked {
+                background-color: #667eea !important;
+                border-color: #667eea !important;
+            }
 
-        .mobile-menu-toggle {
-            display: none;
+            .mobile-menu-toggle {
+                display: none;
+            }
         }
 
         /* Custom scrollbar */
@@ -774,9 +791,6 @@
         <!-- Sidebar -->
         <nav class="admin-sidebar d-flex flex-column p-3" id="adminSidebar">
             <div class="mb-4">
-                <!-- <button class="btn btn-link desktop-sidebar-toggle p-0 me-3 d-none d-md-block" onclick="toggleDesktopSidebar()" id="sidebarToggle">
-                    <i class="fas fa-bars fa-lg"></i>
-                </button> -->
                 <h4 class="text-white mb-0">
                     <i class="fas fa-wine-bottle me-2"></i>
                     TipsyTheoryy
@@ -893,7 +907,7 @@
             <header class="admin-header p-3" style="position: sticky; top: 0; z-index: 1020;">
                 <div class="d-flex justify-content-between align-items-center">
                     <div class="d-flex align-items-center">
-                        
+
                         <button class="btn btn-link mobile-menu-toggle p-0 me-3 d-md-none" onclick="toggleSidebar()">
                             <i class="fas fa-bars fa-lg"></i>
                         </button>
@@ -916,7 +930,7 @@
                     <div class="d-flex align-items-center gap-3">
                         <!-- Theme Toggle -->
                         <div class="dropdown">
-                            <button onclick="toggleThemeMenu()" class="btn btn-link position-relative" type="button">
+                            <button id="themeToggleBtn" onclick="toggleThemeMenu()" class="btn btn-link position-relative" type="button">
                                 <i id="themeIcon" class="fas fa-sun text-warning"></i>
                             </button>
                             <div id="themeMenu" class="dropdown-menu dropdown-menu-end" style="display: none;">
@@ -999,9 +1013,6 @@
             lastTouchEnd = now;
         }, false);
 
-        // Allow table and content scrolling on mobile
-        // Users can scroll horizontally on tables and pinch-zoom for accessibility
-
         // Sidebar toggle for mobile
         function toggleSidebar() {
             document.getElementById('adminSidebar').classList.toggle('show');
@@ -1033,7 +1044,7 @@
             const sidebar = document.getElementById('adminSidebar');
             const toggle = document.querySelector('.mobile-menu-toggle');
 
-            if (!sidebar.contains(event.target) && !toggle.contains(event.target) && sidebar.classList.contains('show')) {
+            if (!sidebar.contains(event.target) && toggle && !toggle.contains(event.target) && sidebar.classList.contains('show')) {
                 sidebar.classList.remove('show');
             }
         });
@@ -1166,7 +1177,20 @@
             button.disabled = false;
         }
 
-        // Theme management
+        /* ===================== Theme management ===================== */
+        // FIX SUMMARY:
+        // 1. The outside-click handler used to match the theme button via
+        //    `button[onclick="toggleThemeMenu()"]`, which is a fragile attribute
+        //    selector that can silently fail to match depending on attribute
+        //    serialization. The button now has id="themeToggleBtn" and the
+        //    handler matches on that id directly.
+        // 2. The "auto"/System mode listener for prefers-color-scheme is now
+        //    attached unconditionally on load AND re-attached whenever the user
+        //    picks "auto" via setTheme(), so switching the OS theme works
+        //    immediately without requiring a page reload.
+
+        let systemThemeListenerAttached = false;
+
         function toggleThemeMenu() {
             const menu = document.getElementById('themeMenu');
             if (menu) {
@@ -1178,6 +1202,11 @@
         function setTheme(theme) {
             localStorage.setItem('admin-theme', theme);
             applyTheme(theme);
+
+            if (theme === 'auto') {
+                attachSystemThemeListener();
+            }
+
             const menu = document.getElementById('themeMenu');
             if (menu) {
                 menu.style.display = 'none';
@@ -1214,16 +1243,23 @@
             }
         }
 
+        function attachSystemThemeListener() {
+            if (systemThemeListenerAttached) return;
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+                if (localStorage.getItem('admin-theme') === 'auto') {
+                    applyTheme('auto');
+                }
+            });
+            systemThemeListenerAttached = true;
+        }
+
         // Initialize theme and sidebar on page load
         document.addEventListener('DOMContentLoaded', function() {
             const savedTheme = localStorage.getItem('admin-theme') || 'light';
             applyTheme(savedTheme);
 
-            // Listen for system theme changes when in auto mode
             if (savedTheme === 'auto') {
-                window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
-                    applyTheme('auto');
-                });
+                attachSystemThemeListener();
             }
 
             // Initialize sidebar state
@@ -1245,17 +1281,22 @@
 
             // Initialize tooltips
             const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-            const tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            tooltipTriggerList.map(function (tooltipTriggerEl) {
                 return new bootstrap.Tooltip(tooltipTriggerEl);
             });
         });
 
-        // Close theme menu when clicking outside
+        // Close theme menu when clicking outside (FIXED selector)
         document.addEventListener('click', function(event) {
             const themeMenu = document.getElementById('themeMenu');
-            const themeButton = event.target.closest('button[onclick="toggleThemeMenu()"]');
+            const themeButton = document.getElementById('themeToggleBtn');
 
-            if (themeMenu && themeButton && !themeMenu.contains(event.target) && !themeButton.contains(event.target)) {
+            if (!themeMenu || !themeButton) return;
+
+            const clickedInsideMenu = themeMenu.contains(event.target);
+            const clickedToggleButton = themeButton.contains(event.target);
+
+            if (!clickedInsideMenu && !clickedToggleButton) {
                 if (themeMenu.style.display === 'block') {
                     themeMenu.style.display = 'none';
                 }

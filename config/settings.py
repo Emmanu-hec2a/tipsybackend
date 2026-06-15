@@ -9,7 +9,7 @@ import dj_database_url
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('SECRET_KEY', 'd*+?8s,fldT(@.6~TtSULTd\thq~qM\*{1f{kZ&Z2Ga&/P_=~')
+SECRET_KEY = os.environ.get('SECRET_KEY')
 
 # settings.py
 SESSION_ENGINE = "django.contrib.sessions.backends.db"  # default
@@ -33,6 +33,7 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     ".railway.app",
+    # "192.168.137.1",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
@@ -40,6 +41,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5050",
     "https://tipsytheoryy.com",
     "https://www.tipsytheoryy.com",
+    # "http://192.168.137.1:8000",
 ]
 
 # SECURE_SSL_REDIRECT = True
