@@ -10,16 +10,125 @@ from django.core.files.base import ContentFile
 import os
 
 class User(AbstractUser):
-    """Extended user model for students"""
+    class Role(models.TextChoices):
+        CUSTOMER   = 'customer', 'Customer'
+        PARTNER    = 'partner', 'Partner'
+        RIDER      = 'rider', 'Rider'
+        SUPERADMIN = 'superadmin', 'Super Admin'
+
+    role = models.CharField(max_length=20, choices=Role.choices,
+                             default=Role.CUSTOMER)
+    phone = models.CharField(max_length=15, unique=True, null=True, blank=True)
+    business_name = models.CharField(max_length=200, null=True, blank=True)
+    business_location = models.CharField(max_length=300, null=True, blank=True)
+    is_approved = models.BooleanField(default=False)
+    assigned_store = models.ForeignKey('Store', null=True, blank=True,
+                         on_delete=models.SET_NULL, related_name='riders')
+    is_available = models.BooleanField(default=False)
+    telegram_chat_id = models.CharField(max_length=100, null=True, blank=True)
+    total_deliveries = models.IntegerField(default=0)
+    avg_rating = models.DecimalField(max_digits=2, decimal_places=1, default=0.0)
+    acceptance_rate = models.DecimalField(max_digits=5, decimal_places=2, default=100.0)
+    bank_account_name = models.CharField(max_length=100, null=True, blank=True)
+    bank_account_number = models.CharField(max_length=50, null=True, blank=True)
+    bank_name = models.CharField(max_length=100, null=True, blank=True)
+    fcm_token = models.CharField(max_length=255, null=True, blank=True)
+
+    # Legacy/Existing fields
     phone_number = models.CharField(max_length=15, blank=True)
     default_hostel = models.CharField(max_length=100, blank=True)
     default_room = models.CharField(max_length=50, blank=True)
     student_email = models.EmailField(unique=True, null=True, blank=True)
     loyalty_points = models.IntegerField(default=0)
     is_verified = models.BooleanField(default=False)
+    profile_picture = models.ImageField(upload_to='profiles/', null=True, blank=True)
+    favourite_stores = models.ManyToManyField('Store', blank=True, related_name='favourited_by')
+    wallet_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
     
     def __str__(self):
         return self.username
+
+class Store(models.Model):
+    owner = models.OneToOneField(User, on_delete=models.CASCADE, related_name='store')
+    name = models.CharField(max_length=200)
+    is_active = models.BooleanField(default=False)
+    is_pro = models.BooleanField(default=False)
+    
+    # Operational fields
+    opening_time = models.TimeField(null=True, blank=True)
+    closing_time = models.TimeField(null=True, blank=True)
+
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=200.0)
+    delivery_radius_km = models.IntegerField(default=7)
+
+    # Branding
+    shop_name = models.CharField(max_length=200, null=True, blank=True)
+    subdomain = models.SlugField(unique=True, null=True, blank=True)
+    logo = models.ImageField(upload_to='store_logos/', null=True, blank=True)
+    cover_image = models.ImageField(upload_to='store_covers/', null=True, blank=True)
+    primary_color = models.CharField(max_length=7, default='#F97316')
+    secondary_color = models.CharField(max_length=7, default='#1F2937')
+    tagline = models.CharField(max_length=200, null=True, blank=True)
+    custom_domain = models.CharField(max_length=200, null=True, blank=True)
+
+    # Discovery
+    rating = models.DecimalField(max_digits=2, decimal_places=1, default=0.0)
+    rating_count = models.IntegerField(default=0)
+    avg_delivery_minutes = models.IntegerField(default=30)
+    is_open = models.BooleanField(default=True)
+    opens_at = models.TimeField(null=True, blank=True)
+    closes_at = models.TimeField(null=True, blank=True)
+
+    # Plan / billing
+    plan = models.CharField(max_length=20, choices=[
+        ('base', 'Base'), ('pro', 'Pro'), ('custom', 'Custom')], default='base')
+    plan_price = models.DecimalField(max_digits=10, decimal_places=2, default=5000)
+    subscription_active = models.BooleanField(default=False)
+    subscription_expires = models.DateField(null=True, blank=True)
+    billing_status = models.CharField(max_length=20, choices=[
+        ('active', 'Active'), ('grace_period', 'Grace Period'),
+        ('suspended', 'Suspended')], default='active')
+    last_payment_date = models.DateField(null=True, blank=True)
+    last_expiry_reminder_sent = models.DateField(null=True, blank=True)
+
+    # PayHero (Rail 1 — order payments only)
+    payhero_username = models.CharField(max_length=200, null=True, blank=True)
+    payhero_api_key = models.CharField(max_length=200, null=True, blank=True)
+    payhero_account_number = models.CharField(max_length=50, null=True, blank=True)
+
+    # Flutterwave / platform-managed payments
+    payment_provider = models.CharField(
+        max_length=20,
+        choices=[('flutterwave', 'Flutterwave'), ('manual', 'Manual')],
+        default='flutterwave'
+    )
+    flutterwave_enabled = models.BooleanField(default=True)
+    flutterwave_public_key = models.CharField(max_length=255, null=True, blank=True)
+    flutterwave_secret_key = models.CharField(max_length=255, null=True, blank=True)
+    flutterwave_webhook_secret = models.CharField(max_length=255, null=True, blank=True)
+    flutterwave_currency = models.CharField(max_length=10, default='KES')
+
+    telegram_chat_id = models.CharField(max_length=100, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+    def display_name(self):
+        if self.plan in ['pro', 'custom'] and self.shop_name:
+            return self.shop_name
+        return 'Tipsy Theoryy'
+
+    @property
+    def primary_color_rgb(self):
+        hex_color = self.primary_color.lstrip('#')
+        try:
+            rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+            return f"{rgb[0]}, {rgb[1]}, {rgb[2]}"
+        except Exception:
+            return "234, 88, 12" # Fallback orange-600
 
 class FoodCategory(models.Model):
     """Categories for organizing food items"""
@@ -34,7 +143,6 @@ class FoodCategory(models.Model):
     icon = models.CharField(max_length=50, blank=True)  # emoji or icon class
     order = models.IntegerField(default=0)  # for sorting
     store_type = models.CharField(max_length=10, choices=STORE_CHOICES, default='liquor')
-    #stock_quantity = models.PositiveIntegerField(default=0, help_text="Available stock for this category (for liquor store)")
     
     class Meta:
         verbose_name_plural = "Liquor Categories"
@@ -51,15 +159,29 @@ class FoodItem(models.Model):
         ('grocery', 'Grocery Shop'),
     ]
     
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, null=True, blank=True) # Nullable for migration
     name = models.CharField(max_length=100)
     description = models.TextField()
-    category = models.ForeignKey(FoodCategory, on_delete=models.CASCADE, related_name='items')
+    category_fkey = models.ForeignKey(FoodCategory, on_delete=models.CASCADE, related_name='items', null=True, blank=True)
+    
+    # New category choices as requested
+    CATEGORY_CHOICES = [
+        ('whisky','Whisky'), ('wine','Wine'), ('beer','Beer'),
+        ('gin','Gin'), ('spirits','Spirits'), ('champagne','Champagne')
+    ]
+    category = models.CharField(max_length=30, choices=CATEGORY_CHOICES, null=True, blank=True)
+    sku = models.CharField(max_length=50, unique=True, null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    discount_percent = models.IntegerField(default=0)
+    original_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+
     price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)])
     stock = models.PositiveIntegerField(default=0, help_text="Available units in stock")
     low_stock_threshold = models.PositiveIntegerField(default=2, help_text="Alert when stock goes below this number")
     image = models.ImageField(upload_to='food_images/')
     prep_time = models.IntegerField(help_text="Preparation time in minutes", default=15)
     is_available = models.BooleanField(default=True)
+    is_new_arrival = models.BooleanField(default=False)
     is_featured = models.BooleanField(default=False)
     is_meal_of_day = models.BooleanField(default=False)
     times_ordered = models.IntegerField(default=0)  # for popularity tracking
@@ -69,28 +191,18 @@ class FoodItem(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        # Flag to track if we need to optimize
         should_optimize = False
-        
-        # Check if this is a NEW file upload (not just a path reference)
         if self.image:
             try:
-                # If image.file exists, it's a NEW upload
                 if hasattr(self.image, 'file') and hasattr(self.image.file, 'read'):
                     should_optimize = True
             except:
-                # If any error, it's probably an existing path reference
                 should_optimize = False
         
-        # Only optimize if we detected a new file upload
         if should_optimize:
             try:
-                # Reset file pointer
                 self.image.file.seek(0)
-                
                 img = Image.open(self.image.file)
-                
-                # Convert to RGB (handles PNG transparency)
                 if img.mode in ("RGBA", "LA", "P"):
                     background = Image.new("RGB", img.size, (255, 255, 255))
                     if img.mode in ("RGBA", "LA"):
@@ -99,41 +211,22 @@ class FoodItem(models.Model):
                         background.paste(img)
                     img = background
                 
-                # Resize if too large
                 max_size = (800, 800)
                 if img.width > max_size[0] or img.height > max_size[1]:
                     img.thumbnail(max_size, Image.Resampling.LANCZOS)
                 
-                # Compress
                 buffer = BytesIO()
-                img.save(
-                    buffer,
-                    format="JPEG",
-                    quality=75,
-                    optimize=True,
-                    progressive=True
-                    # No subsampling parameter
-                )
+                img.save(buffer, format="JPEG", quality=75, optimize=True, progressive=True)
                 buffer.seek(0)
                 
-                # Get clean filename with .jpg extension
                 original_filename = os.path.basename(self.image.name)
                 filename_without_ext = os.path.splitext(original_filename)[0]
                 new_filename = f"{filename_without_ext}.jpg"
                 
-                # Save optimized image
-                self.image.save(
-                    new_filename,
-                    ContentFile(buffer.read()),
-                    save=False
-                )
-                
-                print(f"✅ Optimized NEW upload: {self.name} - {new_filename}")
-                
+                self.image.save(new_filename, ContentFile(buffer.read()), save=False)
             except Exception as e:
                 print(f"⚠️ Optimization skipped for {self.name}: {e}")
         
-        # Save the model (won't re-trigger optimization because file is already saved)
         super().save(*args, **kwargs)
     
     @property
@@ -194,14 +287,38 @@ class CartItem(models.Model):
 class Order(models.Model):
     """Customer orders"""
     STATUS_CHOICES = [
-        ('payment_pending', 'Payment Pending'),
         ('pending', 'Pending'),
-        ('preparing', ' Preparing'),
-        ('out_for_delivery', 'Out for Delivery'),
+        ('confirmed', 'Confirmed'),
+        ('assigned', 'Assigned to Rider'),
+        ('picked_up', 'Picked Up'),
+        ('arrived', 'Rider Arrived'),
         ('delivered', 'Delivered'),
         ('cancelled', 'Cancelled'),
     ]
     
+    PAYMENT_STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('paid', 'Paid'),
+        ('failed', 'Failed')
+    ]
+
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, null=True, blank=True) # Nullable for migration
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    address_string = models.CharField(max_length=500, null=True, blank=True)
+    google_maps_link = models.CharField(max_length=300, null=True, blank=True)
+    assigned_rider = models.ForeignKey(User, null=True, blank=True,
+                         on_delete=models.SET_NULL, related_name='deliveries')
+    
+    tip_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    rider_base_fare = models.DecimalField(max_digits=10, decimal_places=2, default=200)
+    eta_minutes = models.IntegerField(null=True, blank=True)
+    picked_up_at = models.DateTimeField(null=True, blank=True)
+    arrived_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    delivery_window_start = models.TimeField(null=True, blank=True)
+    delivery_window_end = models.TimeField(null=True, blank=True)
+
     order_number = models.CharField(max_length=20, unique=True, editable=False)
     is_test_order = models.BooleanField(default=False)
     has_reviewed_items = models.BooleanField(default=False)
@@ -209,38 +326,24 @@ class Order(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     
     # Delivery information
-    hostel = models.CharField(max_length=100)
-    room_number = models.CharField(max_length=50)
+    hostel = models.CharField(max_length=100, null=True, blank=True)
+    room_number = models.CharField(max_length=50, null=True, blank=True)
     phone_number = models.CharField(max_length=15)
     delivery_notes = models.TextField(blank=True)
-    delivery_guy = models.ForeignKey(
-        'DeliveryGuy',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='orders',
-        help_text="Assign a delivery person to this order"
-    )
     
     # Pricing
     subtotal = models.DecimalField(max_digits=10, decimal_places=2)
     delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=10, decimal_places=2)
+    
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    estimated_delivery = models.DateTimeField(null=True, blank=True, default=30)
-    delivered_at = models.DateTimeField(null=True, blank=True)
+    estimated_delivery = models.DateTimeField(null=True, blank=True)
     
     # Payment information
     payment_method = models.CharField(max_length=10, choices=[('mpesa', 'MPESA'), ('till', 'TILL')], default='mpesa')
-    payment_status = models.CharField(max_length=20, choices=[
-        ('pending', 'Pending'),
-        ('processing', 'Processing'),
-        ('completed', 'Completed'),
-        ('failed', 'Failed'),
-        ('cancelled', 'Cancelled')
-    ], default='pending')
+    payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='pending')
     payment_type = models.CharField(max_length=20, choices=[
         ('till', 'Till Number'),
         ('paybill', 'Paybill Number')
@@ -262,21 +365,38 @@ class Order(models.Model):
 
     # Additional fields
     cancellation_reason = models.TextField(blank=True)
-    rating = models.IntegerField(null=True, blank=True, validators=[MinValueValidator(1), MaxValueValidator(5)])
-    review = models.TextField(blank=True)
+    rating_value = models.IntegerField(null=True, blank=True, validators=[MinValueValidator(1), MaxValueValidator(5)])
+    review_text = models.TextField(blank=True)
     
     # Review prompt tracking
-    review_prompted_count = models.IntegerField(default=0, help_text="Number of times review prompt has been shown")
-    review_prompt_dismissed_at = models.DateTimeField(null=True, blank=True, help_text="Last time review prompt was dismissed")
+    review_prompted_count = models.IntegerField(default=0)
+    review_prompt_dismissed_at = models.DateTimeField(null=True, blank=True)
     
     class Meta:
         ordering = ['-created_at']
     
     def save(self, *args, **kwargs):
+        is_new = self._state.adding
+        old_status = None
+        if not is_new:
+            old_status = Order.objects.get(pk=self.pk).status
+
         if not self.order_number:
-            # Generate unique order number
             self.order_number = f"TT{timezone.now().strftime('%Y%m%d')}{uuid.uuid4().hex[:6].upper()}"
         super().save(*args, **kwargs)
+
+        # Handle inventory deduction on delivery
+        if old_status != 'delivered' and self.status == 'delivered':
+            for item in self.items.all():
+                food_item = item.food_item
+                if food_item.stock >= item.quantity:
+                    food_item.stock -= item.quantity
+                else:
+                    food_item.stock = 0
+                
+                # Update popularity
+                food_item.times_ordered += item.quantity
+                food_item.save(update_fields=['stock', 'times_ordered'])
     
     def __str__(self):
         return f"Order {self.order_number} - {self.user.username}"
@@ -344,7 +464,7 @@ class Promotion(models.Model):
     
 class PushSubscription(models.Model):
     endpoint = models.TextField(unique=True)
-    keys = models.JSONField()  # stores 'p256dh' and 'auth'
+    keys = models.JSONField()
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -356,28 +476,15 @@ class MpesaTransaction(models.Model):
     ('callback_received', 'Callback Received'),
     ('stk_query', 'STK Query'),
     ]
-    order = models.ForeignKey(
-        'Order',
-        on_delete=models.CASCADE,
-        related_name='mpesa_transactions'
-    )
-
+    order = models.ForeignKey('Order', on_delete=models.CASCADE, related_name='mpesa_transactions')
     checkout_request_id = models.CharField(max_length=50, db_index=True)
-    mpesa_receipt_number = models.CharField(
-        max_length=20,
-        unique=True,
-        null=True,
-        blank=True
-    )
-
+    mpesa_receipt_number = models.CharField(max_length=20, unique=True, null=True, blank=True)
     phone_number = models.CharField(max_length=15)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     transaction_date = models.CharField(max_length=20, blank=True, null=True)
     result_code = models.IntegerField()
     result_desc = models.TextField()
-
     raw_callback = models.JSONField()
-
     event_type = models.CharField(max_length=30, choices=EVENT_CHOICES, default='stk_initiated')
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -388,7 +495,7 @@ class MpesaTransaction(models.Model):
         return f"{self.mpesa_receipt_number or 'PENDING'} - {self.order.order_number}"
 
 class DeliveryGuy(models.Model):
-    """Delivery personnel for orders"""
+    """Legacy Delivery personnel for orders"""
     name = models.CharField(max_length=100)
     phone_number = models.CharField(max_length=15)
     is_active = models.BooleanField(default=True)
@@ -404,87 +511,64 @@ class DeliveryGuy(models.Model):
     
     @property
     def total_deliveries(self):
-        """Count total delivered orders"""
         return self.orders.filter(status='delivered').count()
     
     @property
     def total_revenue(self):
-        """Sum total delivered orders revenue"""
         return self.orders.filter(status='delivered').aggregate(total=Sum('total'))['total'] or 0
-    
-    @property
-    def delivered_orders(self):
-        """Get all delivered orders"""
-        return self.orders.filter(status='delivered').order_by('-delivered_at')
-    
-    def get_current_week_start(self):
-        """Get the start date (Monday) of the current week"""
-        from datetime import datetime, timedelta
-        today = timezone.now().date()
-        # Monday is 0, Sunday is 6
-        days_since_monday = today.weekday()
-        week_start = today - timedelta(days=days_since_monday)
-        return week_start
-    
-    def get_current_week_end(self):
-        """Get the end date (Sunday) of the current week"""
-        from datetime import datetime, timedelta
-        week_start = self.get_current_week_start()
-        week_end = week_start + timedelta(days=6)
-        return week_end
-    
-    def get_this_week_deliveries(self):
-        """Get number of deliveries for current week"""
-        from datetime import datetime, timedelta
-        week_start = self.get_current_week_start()
-        week_end = self.get_current_week_end()
-        week_start_datetime = timezone.make_aware(timezone.datetime.combine(week_start, timezone.datetime.min.time()))
-        week_end_datetime = timezone.make_aware(timezone.datetime.combine(week_end, timezone.datetime.max.time()))
-        
-        return self.orders.filter(
-            status='delivered',
-            delivered_at__gte=week_start_datetime,
-            delivered_at__lte=week_end_datetime
-        ).count()
-    
-    def get_this_week_revenue(self):
-        """Get revenue for current week"""
-        from datetime import datetime, timedelta
-        week_start = self.get_current_week_start()
-        week_end = self.get_current_week_end()
-        week_start_datetime = timezone.make_aware(timezone.datetime.combine(week_start, timezone.datetime.min.time()))
-        week_end_datetime = timezone.make_aware(timezone.datetime.combine(week_end, timezone.datetime.max.time()))
-        
-        return self.orders.filter(
-            status='delivered',
-            delivered_at__gte=week_start_datetime,
-            delivered_at__lte=week_end_datetime
-        ).aggregate(total=Sum('total'))['total'] or 0
-    
-    def get_or_create_current_week_payment(self):
-        """Get or create the weekly payment record for current week"""
-        week_start = self.get_current_week_start()
-        week_end = self.get_current_week_end()
-        
-        weekly_payment, created = DeliveryGuyWeeklyPayment.objects.get_or_create(
-            delivery_guy=self,
-            week_start=week_start,
-            week_end=week_end,
-            defaults={
-                'deliveries_count': self.get_this_week_deliveries(),
-                'total_revenue': self.get_this_week_revenue(),
-            }
-        )
-        return weekly_payment
+
+class DeliveryGuyWeeklyPayment(models.Model):
+    delivery_guy = models.ForeignKey(DeliveryGuy, on_delete=models.CASCADE, related_name='weekly_payments')
+    week_start = models.DateField()
+    week_end = models.DateField()
+    deliveries_count = models.IntegerField(default=0)
+    total_revenue = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    is_paid = models.BooleanField(default=False)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+class Rating(models.Model):
+    order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name='order_rating')
+    customer = models.ForeignKey(User, on_delete=models.CASCADE)
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='store_ratings')
+    rider = models.ForeignKey(User, on_delete=models.SET_NULL, null=True,
+                related_name='ratings_received')
+    store_rating = models.IntegerField(choices=[(i, i) for i in range(1, 6)])
+    rider_rating = models.IntegerField(choices=[(i, i) for i in range(1, 6)], null=True, blank=True)
+    comment = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+class RiderEarning(models.Model):
+    rider = models.ForeignKey(User, on_delete=models.CASCADE, related_name='earnings')
+    order = models.OneToOneField(Order, on_delete=models.CASCADE)
+    base_fare = models.DecimalField(max_digits=10, decimal_places=2)
+    tip = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+class RiderLocationPing(models.Model):
+    rider = models.ForeignKey(User, on_delete=models.CASCADE, related_name='location_pings')
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, null=True, blank=True)
+    latitude = models.DecimalField(max_digits=9, decimal_places=6)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+class SubscriptionPayment(models.Model):
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='subscription_payments')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    status = models.CharField(max_length=20, choices=[('success','Success'),('failed','Failed')])
+    mpesa_receipt = models.CharField(max_length=50, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+class PlatformConfig(models.Model):
+    daraja_consumer_key = models.CharField(max_length=200)
+    daraja_consumer_secret = models.CharField(max_length=200)
+    daraja_shortcode = models.CharField(max_length=20)
+    daraja_passkey = models.CharField(max_length=200)
 
 class SiteSettings(models.Model):
-    """Singleton model for site-wide settings"""
-    delivery_fee = models.DecimalField(
-        max_digits=10, 
-        decimal_places=2, 
-        default=20,
-        help_text="Delivery fee in KES"
-    )
+    delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=20)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -496,34 +580,25 @@ class SiteSettings(models.Model):
     
     @classmethod
     def get_instance(cls):
-        """Get or create singleton instance"""
         instance, _ = cls.objects.get_or_create(id=1)
         return instance
-    
-    @classmethod
-    def get_delivery_fee(cls):
-        """Get current delivery fee"""
-        instance = cls.get_instance()
-        return instance.delivery_fee
 
-class DeliveryGuyWeeklyPayment(models.Model):
-    """Track weekly payments and delivery counts for delivery guys"""
-    delivery_guy = models.ForeignKey(DeliveryGuy, on_delete=models.CASCADE, related_name='weekly_payments')
-    week_start = models.DateField(help_text="Start date of the week")
-    week_end = models.DateField(help_text="End date of the week")
-    deliveries_count = models.IntegerField(default=0, help_text="Number of deliveries for the week")
-    total_revenue = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Total revenue for the week")
-    is_paid = models.BooleanField(default=False, help_text="Whether the payment has been marked as completed")
-    paid_at = models.DateTimeField(null=True, blank=True, help_text="When the payment was marked as completed")
+class SavedAddress(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='saved_addresses')
+    name = models.CharField(max_length=100, help_text='e.g. Home, Office')
+    address_string = models.TextField()
+    latitude = models.DecimalField(max_digits=12, decimal_places=9)
+    longitude = models.DecimalField(max_digits=12, decimal_places=9)
+    is_default = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    class Meta:
-        verbose_name = "Delivery Guy Weekly Payment"
-        verbose_name_plural = "Delivery Guy Weekly Payments"
-        unique_together = ('delivery_guy', 'week_start', 'week_end')
-        ordering = ['-week_start']
-    
-    def __str__(self):
-        return f"{self.delivery_guy.name} - Week of {self.week_start} ({self.deliveries_count} deliveries)"
 
+    class Meta:
+        ordering = ['-is_default', '-created_at']
+
+    def __str__(self):
+        return f"{self.name}: {self.address_string}"
+    
+    def save(self, *args, **kwargs):
+        if self.is_default:
+            SavedAddress.objects.filter(user=self.user).update(is_default=False)
+        super().save(*args, **kwargs)

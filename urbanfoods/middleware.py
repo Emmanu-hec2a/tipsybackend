@@ -1,6 +1,7 @@
 # urbanfoods/middleware.py
 from django.conf import settings
 from importlib import import_module
+from .models import Store
 
 class CustomAdminSessionMiddleware:
     def __init__(self, get_response):
@@ -20,16 +21,22 @@ class CustomAdminSessionMiddleware:
             request.session_cookie_name = settings.SESSION_COOKIE_NAME
 
         response = self.get_response(request)
-
-        # Save session back under correct cookie name
-        if getattr(request, "session", None) and request.session.modified:
-            cookie_name = getattr(request, "session_cookie_name", settings.SESSION_COOKIE_NAME)
-            response.set_cookie(
-                cookie_name,
-                request.session.session_key,
-                httponly=True,
-                secure=False,  # set True in production with HTTPS
-                samesite="Lax"
-            )
-
         return response
+
+class StoreMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        path = request.path
+        parts = path.split('/')
+        # Path: /shop/<slug>/...
+        if len(parts) >= 3 and parts[1] == 'shop':
+            try:
+                request.store = Store.objects.get(subdomain=parts[2], is_active=True)
+            except Store.DoesNotExist:
+                request.store = None
+        else:
+            request.store = None
+            
+        return self.get_response(request)

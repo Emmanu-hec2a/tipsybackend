@@ -19,15 +19,47 @@ from .models import MpesaTransaction, OrderStatusHistory
 from django.db import transaction
 from django.conf import settings
 from decimal import Decimal
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework_simplejwt.tokens import RefreshToken
+from .permissions import IsCustomer, IsPartner, IsRider, IsSuperAdmin
+from rest_framework.decorators import api_view
+import requests
 
 # ==================== HOMEPAGE & FOOD CATALOG ====================
+
+@api_view(['POST'])
+def reverse_geocode(request):
+    lat, lng = request.data.get('latitude'), request.data.get('longitude')
+    if not lat or not lng:
+        return Response({'error': 'latitude and longitude required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lng}&format=json"
+    try:
+        resp = requests.get(url, headers={'User-Agent': 'TipsyTheoryy/1.0'}, timeout=10)
+        data = resp.json()
+        return Response({
+            'address': data.get('display_name', 'Unknown location'),
+            'maps_link': f"https://www.google.com/maps?q={lat},{lng}"
+        })
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 def offline(request):
     """Offline page for PWA"""
     return render(request, 'offline.html')
 
-def get_delivery_fee_for_store(store_type):
-    """Delivery fee applies only to liquor orders."""
+def get_delivery_fee_for_store(store_type, store=None):
+    """
+    Delivery fee logic:
+    1. If a specific store is provided, use its configured delivery fee.
+    2. Otherwise, fallback to the global site settings if it's a liquor store.
+    """
+    if store:
+        return store.delivery_fee
+    
     if store_type == 'liquor':
         return SiteSettings.get_delivery_fee()
     return Decimal('0.00')
@@ -37,8 +69,11 @@ from django.db.models import Avg, Count, Q
 from django.db.models import Avg, Count, Q
 
 def homepage(request):
+    # Use store from middleware if available (path-based routing /shop/<slug>/)
+    store = getattr(request, 'store', None)
+    
     store_type = request.session.get('store_type', 'liquor')
-    delivery_fee = float(get_delivery_fee_for_store(store_type))
+    delivery_fee = float(get_delivery_fee_for_store(store_type, store=store))
 
     categories = FoodCategory.objects.filter(store_type=store_type)
 
@@ -49,6 +84,14 @@ def homepage(request):
         avg_rating=Avg("reviews__rating"),
         reviews_count=Count("reviews")
     )
+
+    # Filter by store if resolved via middleware
+    if store:
+        food_items = food_items.filter(store=store)
+        categories = categories.filter(items__store=store).distinct()
+    elif store_type == 'liquor':
+        # Legacy/Global fallback for liquor store if no specific store resolved
+        pass
 
     if category_id:
         food_items = food_items.filter(category_id=category_id)
@@ -296,9 +339,11 @@ def get_cart(request):
 
     items = []
     store_type = 'liquor'  # default
+    store = None
     
     for item in cart.items.all():
         store_type = item.food_item.store_type
+        store = item.food_item.store
         items.append({
             'id': item.id,
             'food_item_id': item.food_item.id,
@@ -309,7 +354,7 @@ def get_cart(request):
             'image': item.food_item.image.url if item.food_item.image else None
         })
 
-    delivery_fee = float(get_delivery_fee_for_store(store_type))
+    delivery_fee = float(get_delivery_fee_for_store(store_type, store=store))
 
     subtotal = float(cart.total)
     total = subtotal + delivery_fee
@@ -652,6 +697,7 @@ from django.views.decorators.http import require_http_methods
 
 from .models import Cart, MpesaTransaction, Order, OrderItem, OrderStatusHistory
 from .mpesa_utils import mpesa
+from .utils import is_within_delivery_zone
 import logging, json
 from django.utils import timezone
 
@@ -760,7 +806,8 @@ def _confirm_payment(order, receipt_number=None, notes='Payment confirmed'):
     )
 
     # ── Notifications ──
-    notify_new_order(order)
+    from .utils import notify_payment_received
+    notify_payment_received(order)
     send_customer_order_confirmation(order)
     send_admin_order_notification(order)
 
@@ -799,15 +846,36 @@ def place_order(request):
     delivery_notes = data.get('delivery_notes', '')
     payment_method = data.get('payment_method', 'cash')
 
-    if payment_method not in ['mpesa', 'cash']:
+    lat = data.get('latitude')
+    lng = data.get('longitude')
+    address_string = data.get('address_string')
+
+    if not payment_method not in ['mpesa', 'cash']:
         return JsonResponse({'success': False, 'message': 'Invalid payment method'})
 
     # ── Totals ──
     subtotal = cart.total
-    first_item = cart.items.select_related('food_item').first()
+    first_item = cart.items.select_related('food_item').prefetch_related('food_item__store').first()
+    store = first_item.food_item.store if first_item else None
+    
+    if not store:
+        # Fallback for legacy items without store
+        from .models import Store
+        store = Store.objects.first()
+        
+    if lat and lng:
+        within, distance = is_within_delivery_zone(store, float(lat), float(lng))
+        if not within:
+            return JsonResponse({
+                'success': False,
+                'error': 'outside_zone',
+                'message': f'You are {distance}km away. We deliver within {store.delivery_radius_km}km.',
+                'distance_km': distance
+            }, status=400)
+
     store_type = first_item.food_item.store_type if first_item else 'liquor'
     
-    delivery_fee = get_delivery_fee_for_store(store_type)
+    delivery_fee = get_delivery_fee_for_store(store_type, store=store)
     
     total = subtotal + delivery_fee
     estimated_delivery = timezone.now() + timezone.timedelta(minutes=30)
@@ -828,11 +896,16 @@ def place_order(request):
                     hostel=hostel,
                     room_number=room_number,
                     phone_number=formatted_phone,
+                    latitude=lat,
+                    longitude=lng,
+                    address_string=address_string,
+                    google_maps_link=f"https://www.google.com/maps?q={lat},{lng}" if lat and lng else None,
                     delivery_notes=delivery_notes,
                     subtotal=subtotal,
                     delivery_fee=delivery_fee,
                     total=total,
                     payment_method='mpesa',
+                    store=store,
                     store_type=store_type,
                     payment_type='paybill',
                     payment_status='pending',
@@ -857,21 +930,28 @@ def place_order(request):
                 )
 
                 # ── Initiate STK push ──
-                stk_response = mpesa.initiate_stk_push(
-                    phone_number=formatted_phone,
-                    amount=int(total),
-                    account_reference=order.order_number,
-                    transaction_desc="Tipsy Theoryy Order",
-                    store_type=store_type,
-                )
+                # Check if store has PayHero configured
+                if store and store.payhero_api_key and store.payhero_username:
+                    stk_response = initiate_payhero_stk_push(order)
+                    # initiate_payhero_stk_push returns the json data on success
+                else:
+                    stk_response = mpesa.initiate_stk_push(
+                        phone_number=formatted_phone,
+                        amount=int(total),
+                        account_reference=order.order_number,
+                        transaction_desc="Tipsy Theoryy Order",
+                        store_type=store_type,
+                    )
 
-                if not stk_response.get('success'):
+                if not stk_response.get('success') and not (stk_response.get('status') == 'Success' or (stk_response.get('response') and stk_response['response'].get('Status') == 'Success')):
                     # Let atomic() roll back the order
-                    raise Exception(stk_response.get('message', 'STK push failed'))
+                    raise Exception(stk_response.get('message') or stk_response.get('response', {}).get('Message', 'STK push failed'))
 
-                checkout_request_id = stk_response.get('checkout_request_id')
+                checkout_request_id = stk_response.get('checkout_request_id') or stk_response.get('response', {}).get('CheckoutRequestID')
                 if not checkout_request_id:
-                    raise Exception('No checkout_request_id returned by Safaricom')
+                    # PayHero might not return this the same way, but it's used for polling
+                    # For PayHero we might need to rely on the callback more
+                    pass
 
                 order.mpesa_checkout_request_id = checkout_request_id
                 order.save(update_fields=['mpesa_checkout_request_id'])
@@ -902,11 +982,16 @@ def place_order(request):
             hostel=hostel,
             room_number=room_number,
             phone_number=phone_number,
+            latitude=lat,
+            longitude=lng,
+            address_string=address_string,
+            google_maps_link=f"https://www.google.com/maps?q={lat},{lng}" if lat and lng else None,
             delivery_notes=delivery_notes,
             subtotal=subtotal,
             delivery_fee=delivery_fee,
             total=total,
             payment_method='cash',
+            store=store,
             store_type=store_type,
             payment_status='pending',
             status='pending',
@@ -1169,6 +1254,103 @@ def check_order_payment_status(request, order_number):
 
 
 # ─────────────────────────────────────────────────────────────
+#  PAYHERO MULTI-TENANT PAYMENTS
+# ─────────────────────────────────────────────────────────────
+
+def initiate_payhero_stk_push(order):
+    store = order.store
+    if not store or not store.payhero_api_key or not store.payhero_username:
+        raise ValueError("Store payment not configured. Contact store owner.")
+
+    # Format phone for PayHero (expects 254...)
+    phone = order.phone_number.replace('+', '')
+    if phone.startswith('0'):
+        phone = '254' + phone[1:]
+
+    payload = {
+        'api_key': store.payhero_api_key,
+        'username': store.payhero_username,
+        'amount': int(order.total),
+        'phone': phone,
+        'user_reference': f'ORD-{order.id}'
+    }
+
+    try:
+        response = requests.post(
+            'https://payherokenya.com/sps/portal/app/stk.php',
+            json=payload,
+            timeout=15
+        )
+        data = response.json()
+        
+        # PayHero returns status inside the response object sometimes, or at top level
+        if data.get('status') == 'Success' or (data.get('response') and data['response'].get('Status') == 'Success'):
+            order.payment_status = 'pending'
+            order.save(update_fields=['payment_status'])
+            return data
+        else:
+            error_msg = data.get('message') or (data.get('response') and data['response'].get('Message')) or 'STK push failed'
+            raise Exception(error_msg)
+    except Exception as e:
+        logger.error(f"PayHero STK Error: {str(e)}")
+        raise
+
+@csrf_exempt
+@api_view(['POST'])
+def payhero_callback(request):
+    """
+    Global PayHero callback handler.
+    Expects JSON data with user_reference like 'ORD-42'
+    """
+    data = request.data
+    user_ref = data.get('user_reference')
+    
+    if not user_ref or not user_ref.startswith('ORD-'):
+        return Response({'status': 'ignored'}, status=200)
+
+    try:
+        order_id = user_ref.split('-')[1]
+        order = Order.objects.get(id=order_id)
+        store = order.store
+    except (IndexError, Order.DoesNotExist):
+        return Response({'status': 'not_found'}, status=404)
+
+    from .utils import send_telegram_notification
+    
+    if data.get('status') == 'Success':
+        with transaction.atomic():
+            # Reuse the confirm logic if possible or manually update
+            order.payment_status = 'paid'
+            order.status = 'confirmed' # Or 'pending' per strict sequence
+            order.save()
+            
+            # Record transaction details if provided
+            if data.get('mpesa_code'):
+                order.mpesa_receipt_number = data.get('mpesa_code')
+                order.save(update_fields=['mpesa_receipt_number'])
+
+            OrderStatusHistory.objects.create(
+                order=order,
+                status='confirmed',
+                notes=f"PayHero confirmed. Receipt: {data.get('mpesa_code')}"
+            )
+            
+            from .utils import notify_payment_received
+            notify_payment_received(order)
+    else:
+        order.payment_status = 'failed'
+        order.save(update_fields=['payment_status'])
+        
+        if store and store.telegram_chat_id:
+            send_telegram_notification(
+                store.telegram_chat_id,
+                f"❌ <b>Payment Failed</b>\nOrder: #{order.order_number}\nReason: {data.get('message', 'Unknown error')}"
+            )
+            
+    return Response({'status': 'ok'})
+
+
+# ─────────────────────────────────────────────────────────────
 #  INITIATE MPESA PAYMENT  (retry for existing order)
 # ─────────────────────────────────────────────────────────────
 @login_required
@@ -1230,3 +1412,132 @@ def initiate_mpesa_payment(request):
         'message': stk_result.get('customer_message', 'STK push sent'),
         'checkout_request_id': stk_result['checkout_request_id'],
     })
+
+
+class SaveFCMTokenView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        token = request.data.get('token')
+        if not token:
+            return Response({'error': 'Token required'}, status=status.HTTP_400_BAD_REQUEST)
+        request.user.fcm_token = token
+        request.user.save()
+        return Response({'status': 'ok'})
+
+# ==================== API v1 AUTH & PERMISSIONS ====================
+
+def get_tokens(user):
+    refresh = RefreshToken.for_user(user)
+    refresh['role'] = user.role
+    refresh['store_id'] = getattr(getattr(user, 'store', None), 'id', None)
+    return {
+        'access': str(refresh.access_token),
+        'refresh': str(refresh),
+        'role': user.role
+    }
+
+class CustomerLoginView(APIView):
+    permission_classes = []
+    def post(self, request):
+        username = request.data.get('username')
+        password = request.data.get('password')
+        user = authenticate(username=username, password=password)
+        if not user or user.role != 'customer':
+            return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+        return Response(get_tokens(user))
+
+class PartnerLoginView(APIView):
+    permission_classes = []
+    def post(self, request):
+        username = request.data.get('username')
+        password = request.data.get('password')
+        user = authenticate(username=username, password=password)
+        if not user or user.role != 'partner':
+            return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+        if not user.is_approved:
+            return Response({'error': 'Account pending approval.'}, status=status.HTTP_403_FORBIDDEN)
+        return Response(get_tokens(user))
+
+class RiderLoginView(APIView):
+    permission_classes = []
+    def post(self, request):
+        username = request.data.get('username')
+        password = request.data.get('password')
+        user = authenticate(username=username, password=password)
+        if not user or user.role != 'rider':
+            return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+        return Response(get_tokens(user))
+
+class PartnerSignupView(APIView):
+    permission_classes = []
+    def post(self, request):
+        try:
+            email = request.data['email']
+            username = request.data.get('username', email) # Use email as username if not provided
+            password = request.data['password']
+            business_name = request.data['business_name']
+            business_location = request.data['business_location']
+            phone = request.data.get('phone', '')
+            
+            user = User.objects.create_user(
+                username=username, 
+                email=email,
+                password=password, 
+                role='partner',
+                phone=phone,
+                business_name=business_name,
+                business_location=business_location,
+                is_approved=False,
+            )
+            from .utils import notify_superadmin_new_partner
+            notify_superadmin_new_partner(user)
+            return Response({'message': 'Application received. We will contact you within 24 hours.'}, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class PartnerApprovalView(APIView):
+    permission_classes = [IsSuperAdmin]
+    def post(self, request, user_id):
+        try:
+            partner = User.objects.get(id=user_id, role='partner')
+            partner.is_approved = True
+            partner.save()
+            
+            from .models import Store
+            Store.objects.get_or_create(
+                owner=partner, 
+                defaults={
+                    'name': partner.business_name,
+                    'is_active': True,
+                    'latitude': -1.286389,
+                    'longitude': 36.817223
+                }
+            )
+            
+            from .utils import notify_partner_approved
+            notify_partner_approved(partner)
+            return Response({'message': f'{partner.business_name} is now live.'})
+        except User.DoesNotExist:
+            return Response({'error': 'Partner not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class TestCustomerView(APIView):
+    permission_classes = [IsCustomer]
+    def get(self, request):
+        return Response({'message': 'Hello Customer!'})
+
+class TestPartnerView(APIView):
+    permission_classes = [IsPartner]
+    def get(self, request):
+        return Response({'message': 'Hello Partner!'})
+
+class TestRiderView(APIView):
+    permission_classes = [IsRider]
+    def get(self, request):
+        return Response({'message': 'Hello Rider!'})
+
+class TestSuperAdminView(APIView):
+    permission_classes = [IsSuperAdmin]
+    def get(self, request):
+        return Response({'message': 'Hello SuperAdmin!'})

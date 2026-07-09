@@ -16,7 +16,7 @@ import json
 
 def staff_member_required(view_func=None, login_url='admin_login'):
     actual_decorator = user_passes_test(
-        lambda u: u.is_active and u.is_staff,
+        lambda u: u.is_active and (u.is_staff or (hasattr(u, 'role') and u.role == 'partner')),
         login_url=login_url
     )
     if view_func:
@@ -30,8 +30,8 @@ import json
 
 def admin_login(request):
     """Admin login page with AJAX support"""
-    # If staff user is already logged in
-    if request.user.is_authenticated and request.user.is_staff:
+    # If staff user or partner is already logged in
+    if request.user.is_authenticated and (request.user.is_staff or (hasattr(request.user, 'role') and request.user.role == 'partner')):
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             # AJAX request: return JSON
             return JsonResponse({
@@ -55,7 +55,7 @@ def admin_login(request):
 
         user = authenticate(username=username, password=password)
 
-        if user is not None and user.is_staff:
+        if user is not None and (user.is_staff or (hasattr(user, 'role') and user.role == 'partner')):
             login(request, user)
             return JsonResponse({
                 'success': True,
@@ -1322,7 +1322,7 @@ def admin_analytics(request):
 @staff_member_required(login_url='admin_login')
 def admin_customers(request):
     """Customer management"""
-    customers = User.objects.filter(is_staff=False).annotate(
+    customers = User.objects.filter(role='customer').annotate(
         total_orders=Count('orders'),
         total_spent=Sum('orders__total')
     ).order_by('-total_orders')
@@ -1768,26 +1768,69 @@ def get_delivery_guy_week_deliveries(request, delivery_guy_id):
 
 @staff_member_required(login_url='admin_login')
 def site_settings_view(request):
-    """Manage site settings"""
-    settings = SiteSettings.get_instance()
+    """Manage site settings and PayHero configuration for the store"""
+    user = request.user
+    store = getattr(user, 'store', None)
+    
+    # Singleton site settings (global)
+    site_settings = SiteSettings.get_instance()
     
     if request.method == 'POST':
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-            data = json.loads(request.body)
-            delivery_fee = data.get('delivery_fee')
+            # Handle both JSON and FormData
+            if request.content_type == 'application/json':
+                data = json.loads(request.body)
+            else:
+                data = request.POST.dict()
             
+            # Global settings
+            delivery_fee = data.get('delivery_fee')
             if delivery_fee is not None:
-                settings.delivery_fee = delivery_fee
-                settings.save()
+                site_settings.delivery_fee = delivery_fee
+                site_settings.save()
+            
+            # Store-specific settings
+            if store:
+                # PayHero settings
+                if 'payhero_username' in data:
+                    store.payhero_username = data.get('payhero_username')
+                if 'payhero_api_key' in data:
+                    store.payhero_api_key = data.get('payhero_api_key')
+                if 'payhero_account_number' in data:
+                    store.payhero_account_number = data.get('payhero_account_number')
+                
+                # Branding settings (only if not on base plan)
+                if store.plan != 'base':
+                    if 'shop_name' in data:
+                        store.shop_name = data.get('shop_name')
+                    if 'primary_color' in data:
+                        store.primary_color = data.get('primary_color')
+                    if 'secondary_color' in data:
+                        store.secondary_color = data.get('secondary_color')
+                    if 'tagline' in data:
+                        store.tagline = data.get('tagline')
+                    if request.FILES.get('logo'):
+                        store.logo = request.FILES.get('logo')
+                
+                store.save()
                 
                 return JsonResponse({
                     'success': True,
-                    'message': f'Delivery fee updated to KES {delivery_fee}',
-                    'delivery_fee': float(settings.delivery_fee)
+                    'message': 'Settings updated successfully',
+                    'delivery_fee': float(site_settings.delivery_fee),
+                    'payhero_username': store.payhero_username,
+                    'shop_name': store.shop_name
                 })
+            
+            return JsonResponse({
+                'success': True,
+                'message': 'Global settings updated',
+                'delivery_fee': float(site_settings.delivery_fee)
+            })
     
     context = {
-        'settings': settings,
+        'settings': site_settings,
+        'store': store
     }
     
     return render(request, 'custom_admin/site_settings.html', context)

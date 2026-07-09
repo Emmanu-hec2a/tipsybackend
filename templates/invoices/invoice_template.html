@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        @page {
+            size: a4 portrait;
+            margin: 2cm;
+        }
+        body {
+            font-family: 'Helvetica', 'Arial', sans-serif;
+            color: #1F2937;
+            font-size: 10pt;
+            line-height: 1.4;
+        }
+        .header {
+            border-bottom: 2px solid #0D3B30;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        .brand {
+            font-size: 24pt;
+            font-weight: 900;
+            color: #0D3B30;
+        }
+        .brand span {
+            color: #F97316;
+        }
+        .invoice-title {
+            float: right;
+            text-align: right;
+        }
+        .invoice-title h1 {
+            margin: 0;
+            color: #0D3B30;
+            font-size: 20pt;
+        }
+        .info-grid {
+            width: 100%;
+            margin-bottom: 40px;
+        }
+        .info-col {
+            width: 50%;
+            vertical-align: top;
+        }
+        .label {
+            color: #6B7280;
+            font-weight: bold;
+            text-transform: uppercase;
+            font-size: 8pt;
+            margin-bottom: 5px;
+        }
+        table.items {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 30px;
+        }
+        table.items th {
+            background-color: #F9FAFB;
+            color: #374151;
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #E5E7EB;
+            font-size: 9pt;
+        }
+        table.items td {
+            padding: 12px;
+            border-bottom: 1px solid #F3F4F6;
+        }
+        .total-section {
+            float: right;
+            width: 300px;
+        }
+        .total-row {
+            padding: 8px 0;
+            border-bottom: 1px solid #F3F4F6;
+        }
+        .total-row.grand-total {
+            border-bottom: none;
+            color: #0D3B30;
+            font-size: 14pt;
+            font-weight: 900;
+            background-color: #F9FAFB;
+            padding: 15px;
+            margin-top: 10px;
+        }
+        .footer {
+            margin-top: 100px;
+            text-align: center;
+            color: #9CA3AF;
+            font-size: 8pt;
+            border-top: 1px solid #E5E7EB;
+            padding-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="invoice-title">
+            <h1>INVOICE</h1>
+            <p>#{{ order.order_number }}</p>
+            <p>{{ date }}</p>
+        </div>
+        <div class="brand">Tipsy<span>Theoryy</span></div>
+        <p>{{ store.name }}</p>
+    </div>
+
+    <table class="info-grid">
+        <tr>
+            <td class="info-col">
+                <div class="label">Billed To</div>
+                <strong>{{ order.user.username }}</strong><br>
+                {{ order.user.email }}<br>
+                {{ order.phone_number }}
+            </td>
+            <td class="info-col">
+                <div class="label">Delivery Address</div>
+                {{ order.address_string|default:order.hostel }}<br>
+                Room: {{ order.room_number|default:"N/A" }}
+            </td>
+        </tr>
+    </table>
+
+    <table class="items">
+        <thead>
+            <tr>
+                <th>Item Description</th>
+                <th style="text-align: center;">Quantity</th>
+                <th style="text-align: right;">Unit Price</th>
+                <th style="text-align: right;">Subtotal</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in items %}
+            <tr>
+                <td>{{ item.food_item.name }}</td>
+                <td style="text-align: center;">{{ item.quantity }}</td>
+                <td style="text-align: right;">KES {{ item.price_at_order|floatformat:2 }}</td>
+                <td style="text-align: right;">KES {{ item.subtotal|floatformat:2 }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="total-section">
+        <div class="total-row">
+            <span style="float: left;">Subtotal</span>
+            <span style="float: right;">KES {{ order.subtotal|floatformat:2 }}</span>
+            <div style="clear: both;"></div>
+        </div>
+        <div class="total-row">
+            <span style="float: left;">Delivery Fee</span>
+            <span style="float: right;">KES {{ order.delivery_fee|floatformat:2 }}</span>
+            <div style="clear: both;"></div>
+        </div>
+        {% if order.tip_amount > 0 %}
+        <div class="total-row">
+            <span style="float: left;">Rider Tip</span>
+            <span style="float: right;">KES {{ order.tip_amount|floatformat:2 }}</span>
+            <div style="clear: both;"></div>
+        </div>
+        {% endif %}
+        <div class="total-row grand-total">
+            <span style="float: left;">Total Amount</span>
+            <span style="float: right;">KES {{ order.total|floatformat:2 }}</span>
+            <div style="clear: both;"></div>
+        </div>
+    </div>
+
+    <div style="clear: both;"></div>
+
+    <div class="footer">
+        <p>Thank you for choosing TipsyTheoryy!</p>
+        <p>Generated by {{ store.name }} on {{ date }}</p>
+    </div>
+</body>
+</html>

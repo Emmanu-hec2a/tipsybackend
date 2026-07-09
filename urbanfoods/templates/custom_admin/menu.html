@@ -250,17 +250,9 @@ document.addEventListener('DOMContentLoaded', function() {
             const itemId = this.dataset.id;
             const isAvailable = this.checked;
             
-            fetch('{% url "toggle_food_availability" %}', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': '{{ csrf_token }}'
-                },
-                body: JSON.stringify({
-                    food_item_id: itemId
-                })
+            API.menu.toggleAvailability({
+                food_item_id: itemId
             })
-            .then(response => response.json())
             .then(data => {
                 if (!data.success) {
                     this.checked = !isAvailable;
@@ -285,18 +277,10 @@ document.addEventListener('DOMContentLoaded', function() {
             const newPrice = parseFloat(this.value);
             
             if (newPrice > 0) {
-                fetch('{% url "update_food_price" %}', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': '{{ csrf_token }}'
-                    },
-                    body: JSON.stringify({
-                        food_item_id: itemId,
-                        price: newPrice
-                    })
+                API.menu.updatePrice({
+                    food_item_id: itemId,
+                    price: newPrice
                 })
-                .then(response => response.json())
                 .then(data => {
                     if (data.success) {
                         this.previousElementSibling.textContent = 'KES ' + newPrice;
@@ -329,7 +313,7 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('categoryId').value = id;
             document.getElementById('categoryName').value = name;
             document.getElementById('categoryDescription').value = description;
-            document.getElementById('categoryOrder').value = order;
+            // document.getElementById('categoryOrder').value = order;
 
             var addCategoryModal = new bootstrap.Modal(document.getElementById('addCategoryModal'));
             addCategoryModal.show();
@@ -341,25 +325,17 @@ document.addEventListener('DOMContentLoaded', function() {
         const id = document.getElementById('categoryId').value;
         const name = document.getElementById('categoryName').value;
         const description = document.getElementById('categoryDescription').value;
-        const order = document.getElementById('categoryOrder').value;
+        // const order = document.getElementById('categoryOrder').value;
 
-        const url = id ? `{% url 'edit_category' %}` : `{% url 'add_category' %}`;
+        const apiCall = id ? API.menu.editCategory : API.menu.addCategory;
 
-        fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': '{{ csrf_token }}'
-            },
-            body: JSON.stringify({
-                id: id,
-                name: name,
-                description: description,
-                order: order,
-                store_type: 'food'
-            })
+        apiCall({
+            id: id,
+            name: name,
+            description: description,
+            // order: order,
+            store_type: 'food'
         })
-        .then(response => response.json())
         .then(data => {
             if (data.success) {
                 location.reload();
@@ -372,28 +348,12 @@ document.addEventListener('DOMContentLoaded', function() {
     // Delete category button click
     document.querySelectorAll('.delete-category-btn').forEach(button => {
         button.addEventListener('click', function() {
-            console.log('Delete category button clicked, ID:', this.dataset.id);
             if (!confirm('Are you sure you want to delete this category?')) return;
 
             const id = this.dataset.id;
-            const url = `{% url 'delete_category' %}`;
 
-            console.log('Making request to:', url, 'with ID:', id);
-
-            fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': getCSRFToken()
-                },
-                body: JSON.stringify({ id: id })
-            })
-            .then(response => {
-                console.log('Response status:', response.status);
-                return response.json();
-            })
+            API.menu.deleteCategory({ id: id })
             .then(data => {
-                console.log('Response data:', data);
                 if (data.success) {
                     location.reload();
                 } else {
@@ -453,12 +413,16 @@ document.addEventListener('DOMContentLoaded', function() {
             formData.append('image', imageInput.files[0]);
         }
 
-        const url = id ? `{% url 'edit_food_item' %}` : `{% url 'add_food_item' %}`;
+        // Special case: FormData cannot be easily wrapped in the generic API helper
+        // unless we add support for it. For now, let's keep it mostly as is but use
+        // the generic headers (minus Content-Type which fetch handles for FormData)
+        const url = id ? `/admin-panel/api/menu/edit-food-item/` : `/admin-panel/api/menu/add-food-item/`;
 
         fetch(url, {
             method: 'POST',
             headers: {
-                'X-CSRFToken': '{{ csrf_token }}'
+                'Authorization': `Bearer ${API.getToken()}`,
+                'X-CSRFToken': API.getCSRFToken()
             },
             body: formData
         })
@@ -479,18 +443,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (!amount || isNaN(amount)) return;
 
-            fetch("{% url 'restock_item' %}", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "X-CSRFToken": "{{ csrf_token }}"
-                },
-                body: JSON.stringify({
-                    item_id: itemId,
-                    quantity: amount
-                })
+            API.menu.restock({
+                item_id: itemId,
+                quantity: amount
             })
-            .then(res => res.json())
             .then(data => {
                 if (data.success) {
                     location.reload();
@@ -509,15 +465,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const id = this.dataset.id;
 
-            fetch(`{% url 'delete_food_item' %}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': '{{ csrf_token }}'
-                },
-                body: JSON.stringify({ id: id })
-            })
-            .then(response => response.json())
+            API.menu.deleteFoodItem({ id: id })
             .then(data => {
                 if (data.success) {
                     location.reload();

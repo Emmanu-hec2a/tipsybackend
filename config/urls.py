@@ -52,6 +52,9 @@ urlpatterns = [
     # ==================== STORE SWITCHING ================
     path('api/store/switch/', views.switch_store, name='switch_store'),
     
+    # ==================== API VERSIONING =================
+    path('api/v1/', include('urbanfoods.api_v1_urls')),
+    
     # ==================== CART & ORDERS ================
     # Cart operations
     path('api/cart/', views.get_cart, name='get_cart'),

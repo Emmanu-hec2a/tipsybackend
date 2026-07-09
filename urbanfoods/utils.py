@@ -1,7 +1,20 @@
 # utils.py
 import json
+import os
 from pywebpush import webpush
 from .models import PushSubscription
+from math import radians, sin, cos, sqrt, atan2
+
+def haversine_distance_km(lat1, lng1, lat2, lng2):
+    R = 6371
+    lat1, lng1, lat2, lng2 = map(radians, [lat1, lng1, lat2, lng2])
+    dlat, dlng = lat2 - lat1, lng2 - lng1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlng/2)**2
+    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
+
+def is_within_delivery_zone(store, lat, lng):
+    distance = haversine_distance_km(float(store.latitude), float(store.longitude), lat, lng)
+    return distance <= store.delivery_radius_km, round(distance, 2)
 
 VAPID_PRIVATE_KEY = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgfWfJbjUWsfxd1GxLRwsiVoMo/T5nbZTZKKpa1WUnNA+hRANCAAT9nGX9yf5vW6dwFkKkn6s8rTsIGKiHBwSrGubbo98BtVVfrkwkSMp3v1S9koIv6JigRJ9vLRYFU0b5Zzk3mfdB"
 VAPID_CLAIMS = {"sub": "mailto:petniqueke@gmail.com"}
@@ -37,6 +50,41 @@ def format_phone(phone):
     return phone
 
 
+import firebase_admin
+from firebase_admin import credentials, messaging
+
+# Initialize Firebase Admin
+try:
+    if not firebase_admin._apps:
+        # User needs to place serviceAccountKey.json in the project root
+        cred_path = os.path.join(settings.BASE_DIR, 'serviceAccountKey.json')
+        if os.path.exists(cred_path):
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred)
+except Exception as e:
+    logger.error(f"Firebase Admin initialization failed: {e}")
+
+def send_fcm_notification(user, title, body, data=None):
+    """Send FCM push notification to a specific user"""
+    if not user.fcm_token:
+        return False
+    
+    try:
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
+            data=data or {},
+            token=user.fcm_token,
+        )
+        response = messaging.send(message)
+        logger.info(f"Successfully sent FCM message: {response}")
+        return True
+    except Exception as e:
+        logger.error(f"Error sending FCM message: {e}")
+        return False
+
 def _send_telegram_message_single(message, buttons=None):
     try:
         bot_token = getattr(settings, 'TELEGRAM_BOTT_TOKEN', None)
@@ -71,6 +119,28 @@ def _send_telegram_message_single(message, buttons=None):
 
     except Exception as e:
         logger.error(f"❌ Telegram error: {e}")
+        return False
+
+def send_telegram_notification(chat_id, message):
+    """Send a single telegram message to a specific chat ID"""
+    if not chat_id:
+        return False
+    
+    try:
+        bot_token = getattr(settings, 'TELEGRAM_BOTT_TOKEN', None)
+        if not bot_token:
+            return False
+            
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        payload = {
+            'chat_id': chat_id,
+            'text': message,
+            'parse_mode': 'HTML'
+        }
+        response = requests.post(url, data=payload, timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        logger.error(f"Error sending telegram notification: {e}")
         return False
 
 def send_telegram_message(message, buttons=None):
@@ -141,7 +211,7 @@ def notify_new_order(order):
 ━━━━━━━━━━━━━━━━━━━━
 👤 <b>Customer:</b> {customer_name}
 📱 <b>Phone:</b> {order.phone_number or 'N/A'}
-🏠 <b>Location:</b> {order.hostel or 'N/A'}
+🏠 <b>Location:</b> {order.address_string or order.hostel or 'N/A'}
 🚪 <b>Room:</b> {order.room_number or 'N/A'}
 
 📝 <b>Items:</b>
@@ -157,10 +227,6 @@ def notify_new_order(order):
         # ✅ Admin order link
         admin_url = f"{settings.SITE_URL}/admin-panel/liquor/orders/{order.order_number}/"
 
-        # ✅ Phone dialer link (works on Telegram mobile)
-        phone_number = phone_number = format_phone(order.phone_number) if order.phone_number else ""
-        phone_url = f"tel:{phone_number}" if phone_number else None
-
         # ✅ Inline buttons
         buttons = [
             [
@@ -169,13 +235,21 @@ def notify_new_order(order):
         ]
 
         formatted_phone = format_phone(order.phone_number) if order.phone_number else "N/A"
-        # Optional WhatsApp button
         if order.phone_number:
             wa_url = f"https://wa.me/{formatted_phone.replace('+','')}"
             buttons.append([
                 {"text": "WhatsApp Customer", "url": wa_url}
             ])
 
+        # FCM for customer
+        if order.user:
+            send_fcm_notification(order.user, "Order Received!", f"Order #{order.order_number} placed.")
+
+        # Send to store specific chat if configured
+        if order.store and order.store.telegram_chat_id:
+            send_telegram_notification(order.store.telegram_chat_id, message)
+
+        # Also send to global admins
         return send_telegram_message(message, buttons=buttons)
 
     except Exception as e:
@@ -196,6 +270,12 @@ def notify_payment_received(order):
 Status: Ready for delivery 🚀
     """.strip()
 
+    if order.user:
+        send_fcm_notification(order.user, "Payment Confirmed!", f"Payment for order #{order.order_number} received.")
+
+    if order.store and order.store.telegram_chat_id:
+        send_telegram_notification(order.store.telegram_chat_id, message)
+
     return send_telegram_message(message)
 
 
@@ -212,6 +292,12 @@ def notify_order_delivered(order):
 Status: Completed ✅
     """.strip()
 
+    if order.user:
+        send_fcm_notification(order.user, "Enjoy!", f"Order #{order.order_number} delivered.")
+
+    if order.store and order.store.telegram_chat_id:
+        send_telegram_notification(order.store.telegram_chat_id, message)
+
     return send_telegram_message(message)
 
 def notify_low_stock(product):
@@ -223,7 +309,7 @@ def notify_low_stock(product):
 🍾 <b>{product.name}</b>
 📦 Remaining Stock: <b>{product.stock}</b>
 🏷️ Threshold: {threshold}
-🏷 Category: {product.category.name}
+🏷 Category: {product.category.name if hasattr(product, 'category') and hasattr(product.category, 'name') else 'N/A'}
 
 Restock soon!
     """.strip()
@@ -232,8 +318,87 @@ Restock soon!
 
     buttons = [[{"text": "Restock", "url": admin_url}]]
 
+    # Send to store specific chat if available
+    if product.store and product.store.telegram_chat_id:
+        send_telegram_notification(product.store.telegram_chat_id, message)
+
     return send_telegram_message(message, buttons=buttons)
 
+
+def notify_rider_assigned(order, rider):
+    if not rider.telegram_chat_id and not rider.fcm_token:
+        return False
+        
+    message = f"""
+🚴 <b>NEW DELIVERY ASSIGNED!</b>
+
+📦 <b>Order #{order.order_number}</b>
+━━━━━━━━━━━━━━━━━━━━
+👤 <b>Customer:</b> {order.user.username}
+🏠 <b>Location:</b> {order.address_string or order.hostel}
+🚪 <b>Room:</b> {order.room_number or 'N/A'}
+💰 <b>Base Fare:</b> KES {order.rider_base_fare}
+💵 <b>Tip:</b> KES {order.tip_amount}
+
+📍 <a href="{order.google_maps_link}">View on Google Maps</a>
+
+Please head to <b>{order.store.name}</b> to pick up.
+    """.strip()
+    
+    # Send FCM
+    send_fcm_notification(
+        rider,
+        "New Delivery Assigned!",
+        f"New delivery from {order.store.name}.",
+        data={'order_id': str(order.id), 'type': 'new_assignment'}
+    )
+    
+    if rider.telegram_chat_id:
+        return send_telegram_notification(rider.telegram_chat_id, message)
+    return True
+
+def notify_superadmin_new_partner(user):
+    # Get superadmin chat IDs from settings or environment
+    bot_token = getattr(settings, 'TELEGRAM_BOTT_TOKEN', None)
+    chat_ids = getattr(settings, 'TELEGRAM_CHATT_IDS', None) or getattr(settings, 'TELEGRAM_CHATT_ID', None)
+    
+    if isinstance(chat_ids, str):
+        chat_ids = [chat_id.strip() for chat_id in chat_ids.split(',') if chat_id.strip()]
+    elif not chat_ids:
+        return False
+
+    message = f"""
+🤝 <b>NEW PARTNER APPLICATION</b>
+
+👤 <b>User:</b> {user.username}
+📧 <b>Email:</b> {user.email}
+🏢 <b>Business:</b> {user.business_name}
+📍 <b>Location:</b> {user.business_location}
+
+Login to admin panel to approve.
+    """.strip()
+    
+    for chat_id in chat_ids:
+        send_telegram_notification(chat_id, message)
+    return True
+
+def notify_partner_approved(user):
+    if not user.telegram_chat_id and not user.phone:
+        return False
+        
+    message = f"""
+🎉 <b>CONGRATULATIONS!</b>
+
+Your partner account for <b>{user.business_name}</b> has been approved.
+
+Login to your dashboard to set up your store:
+<a href="{settings.SITE_URL}/admin-panel/login/">Merchant Dashboard</a>
+    """.strip()
+    
+    if user.telegram_chat_id:
+        send_telegram_notification(user.telegram_chat_id, message)
+    # SMS could also be triggered here if configured
+    return True
 
 def check_and_notify_low_stock():
     """

@@ -38,14 +38,29 @@
                 </div>
                 <div class="card-body">
                     <form id="deliveryForm">
+                        <div class="mb-4">
+                            <button type="button" id="pinLocationBtn" class="btn btn-outline-primary w-100">
+                                <i class="fas fa-map-marker-alt me-2"></i>Pin My Current Location
+                            </button>
+                            <div id="locationStatus" class="small mt-2 text-muted"></div>
+                        </div>
+
+                        <input type="hidden" id="latitude">
+                        <input type="hidden" id="longitude">
+                        <input type="hidden" id="addressString">
+
                         <div class="row g-3">
                             <div class="col-md-6">
-                                <label class="form-label fw-semibold">Hostel</label>
+                                <label class="form-label fw-semibold">Hostel / Building</label>
                                 <input type="text" class="form-control" id="hostel" required>
                             </div>
                             <div class="col-md-6">
-                                <label class="form-label fw-semibold">Room Number</label>
+                                <label class="form-label fw-semibold">Room / Apartment Number</label>
                                 <input type="text" class="form-control" id="roomNumber" required>
+                            </div>
+                            <div id="addressPreviewGroup" class="col-12 d-none">
+                                <label class="form-label fw-semibold">Detected Address</label>
+                                <p id="addressPreview" class="form-control-plaintext small bg-light p-2 rounded"></p>
                             </div>
                             <div class="col-12">
                                 <label class="form-label fw-semibold">Delivery Instructions</label>
@@ -234,7 +249,83 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Place order
     document.getElementById('placeOrderBtn').addEventListener('click', placeOrder);
+
+    // Pin location
+    document.getElementById('pinLocationBtn').addEventListener('click', captureLocation);
 });
+
+async function captureLocation() {
+    const btn = document.getElementById('pinLocationBtn');
+    const status = document.getElementById('locationStatus');
+    const previewGroup = document.getElementById('addressPreviewGroup');
+    const previewText = document.getElementById('addressPreview');
+
+    if (!navigator.geolocation) {
+        status.textContent = "Geolocation is not supported by your browser";
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Locating...';
+    status.textContent = "Requesting permission...";
+
+    navigator.geolocation.getCurrentPosition(async (position) => {
+        const { latitude, longitude } = position.coords;
+        document.getElementById('latitude').value = latitude;
+        document.getElementById('longitude').value = longitude;
+
+        status.textContent = "Finding address...";
+
+        try {
+            const resp = await fetch('/api/geocode/reverse/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify({ latitude, longitude })
+            });
+            const data = await resp.json();
+
+            if (data.address) {
+                document.getElementById('addressString').value = data.address;
+                previewText.textContent = data.address;
+                previewGroup.classList.remove('d-none');
+                status.textContent = "Location pinned successfully!";
+                status.className = "small mt-2 text-success";
+            }
+        } catch (error) {
+            console.error("Geocoding failed:", error);
+            status.textContent = "Location pinned (address search failed)";
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-check me-2"></i>Location Pinned';
+            btn.className = "btn btn-success w-100";
+        }
+    }, (error) => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-map-marker-alt me-2"></i>Pin My Current Location';
+
+        switch(error.code) {
+            case error.PERMISSION_DENIED:
+                status.textContent = "Permission denied. Please enter address manually.";
+                break;
+            case error.POSITION_UNAVAILABLE:
+                status.textContent = "Location information unavailable.";
+                break;
+            case error.TIMEOUT:
+                status.textContent = "Request timed out.";
+                break;
+            default:
+                status.textContent = "An unknown error occurred.";
+        }
+        status.className = "small mt-2 text-danger";
+    }, {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+    });
+}
 
 async function loadCheckoutData() {
     try {
@@ -296,9 +387,12 @@ async function placeOrder() {
 
     const paymentMethod = document.querySelector('input[name="paymentMethod"]:checked').value;
     const instructions = document.getElementById('instructions').value;
+    const lat = document.getElementById('latitude').value;
+    const lng = document.getElementById('longitude').value;
+    const addressString = document.getElementById('addressString').value;
 
     try {
-        const response = await fetch('/api/orders/create/', {
+        const response = await fetch('/api/order/place/', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -308,23 +402,36 @@ async function placeOrder() {
                 hostel,
                 room_number: roomNumber,
                 payment_method: paymentMethod,
-                delivery_instructions: instructions
+                delivery_notes: instructions,
+                latitude: lat,
+                longitude: lng,
+                address_string: addressString
             })
         });
 
         const data = await response.json();
 
         if (data.success) {
-            if (paymentMethod === 'mpesa' && data.mpesa_checkout_url) {
-                window.location.href = data.mpesa_checkout_url;
+            if (paymentMethod === 'mpesa' && data.checkout_request_id) {
+                // Handle MPESA wait
+                showAlert('Order placed! Awaiting M-Pesa payment...', 'info');
+                // The current codebase likely handles redirection or modal polling here
+                // For now, let's redirect to order detail
+                setTimeout(() => {
+                    window.location.href = `/orders/${data.order_number}/`;
+                }, 2000);
             } else {
                 showAlert('Order placed successfully!', 'success');
                 setTimeout(() => {
-                    window.location.href = `/order/${data.order_number}/`;
+                    window.location.href = `/orders/${data.order_number}/`;
                 }, 2000);
             }
         } else {
-            showAlert(data.message || 'Error placing order', 'danger');
+            if (data.error === 'outside_zone') {
+                showAlert(`Delivery failed: ${data.message}`, 'danger');
+            } else {
+                showAlert(data.message || 'Error placing order', 'danger');
+            }
             resetButton(placeOrderBtn, btnText);
         }
     } catch (error) {

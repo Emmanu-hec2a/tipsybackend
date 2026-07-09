@@ -291,8 +291,7 @@ document.addEventListener('DOMContentLoaded', function() {
 function initializeCharts() {
     const revenueCtx = document.getElementById('revenueChart').getContext('2d');
 
-    fetch('/admin-panel/api/dashboard/stats/')
-        .then(response => response.json())
+    API.dashboard.stats()
         .then(data => {
             if (!data.success) {
                 showAlert('Failed to load dashboard data', 'danger');
@@ -369,8 +368,7 @@ function initializeCharts() {
 }
 
 function loadRecentOrders() {
-    fetch('/admin-panel/api/orders/recent/')
-        .then(response => response.json())
+    API.orders.list()
         .then(data => {
             if (data.success) {
                 updateRecentOrders(data.orders);
@@ -418,8 +416,7 @@ function refreshCharts() {
     const button = event.target.closest('button');
     const originalText = showLoading(button);
 
-    fetch('/admin-panel/api/dashboard/stats/')
-        .then(response => response.json())
+    API.dashboard.stats()
         .then(data => {
             if (data.success) {
                 const revenueData = data.daily_revenue;
@@ -462,7 +459,7 @@ function updateStatsCards(data) {
 }
 
 // Handle admin profile update form submission
-document.getElementById('adminProfileForm').addEventListener('submit', function(event) {
+document.getElementById('adminProfileForm')?.addEventListener('submit', function(event) {
     event.preventDefault();
 
     const form = event.target;
@@ -482,15 +479,7 @@ document.getElementById('adminProfileForm').addEventListener('submit', function(
     const submitButton = form.querySelector('button[type="submit"]');
     const originalText = showLoading(submitButton);
 
-    fetch('/admin-panel/api/admin/update-profile/', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
-        },
-        body: JSON.stringify({ name, email })
-    })
-    .then(response => response.json())
+    API.profile.update({ name, email })
     .then(data => {
         if (data.success) {
             messageDiv.textContent = 'Profile updated successfully!';

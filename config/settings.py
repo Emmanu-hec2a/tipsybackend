@@ -9,7 +9,7 @@ import dj_database_url
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('SECRET_KEY')
+SECRET_KEY = os.environ.get('SECRET_KEY', 'd*+?8s,fldT(@.6~TtSULTd\thq~qM\*{1f{kZ&Z2Ga&/P_=~')
 
 # settings.py
 SESSION_ENGINE = "django.contrib.sessions.backends.db"  # default
@@ -27,21 +27,15 @@ DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
 SITE_URL = os.environ.get('SITE_URL', 'https://tipsytheoryy.com')
 
-ALLOWED_HOSTS = [
-    "tipsytheoryy.com",
-    "www.tipsytheoryy.com",
-    "localhost",
-    "127.0.0.1",
-    ".railway.app",
-    # "192.168.137.1",
-]
+ALLOWED_HOSTS = ['*']
 
 CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:5050",
-    "http://localhost:5050",
+    "http://localhost:8000",
+    "http://192.168.0.11:8000",
     "https://tipsytheoryy.com",
     "https://www.tipsytheoryy.com",
-    # "http://192.168.137.1:8000",
+    "https://*.railway.app",
 ]
 
 # SECURE_SSL_REDIRECT = True
@@ -54,6 +48,8 @@ SITE_ID = 1
 
 # Application definition
 INSTALLED_APPS = [
+    'unfold',
+    'unfold.contrib.filters',
     'django.contrib.admin',  # Django's built-in admin
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -66,13 +62,16 @@ INSTALLED_APPS = [
     'cloudinary',
     'urbanfoods',  # Your app name
     'rest_framework',  # For API endpoints
+    'corsheaders',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'urbanfoods.middleware.CustomAdminSessionMiddleware',
+    'urbanfoods.middleware.StoreMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -168,7 +167,7 @@ if not DEBUG:
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Static files storage with WhiteNoise
 if not DEBUG:
-    STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
+    STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 else:
     STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
 
@@ -195,14 +194,32 @@ TELEGRAM_CHATT_ID=os.environ.get('TELEGRAM_CHATT_ID')
 TELEGRAM_CHATT_IDS=os.environ.get('TELEGRAM_CHATT_IDS')
 
 
+from datetime import timedelta
+
 # REST Framework Configuration
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticatedOrReadOnly',
+        'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_VERSIONING_CLASS': 'rest_framework.versioning.URLPathVersioning',
+    'ALLOWED_VERSIONS': ['v1'],
+    'DEFAULT_VERSION': 'v1',
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=7),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': True,
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
 }
 
 # Caching (Redis recommended for production)
@@ -220,8 +237,7 @@ CACHES = {
 
 # Security Settings (Production)
 if not DEBUG:
-    # Don't use SECURE_SSL_REDIRECT on Railway - they handle HTTPS at proxy level
-    # SECURE_SSL_REDIRECT = True
+    SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_BROWSER_XSS_FILTER = True # Enable XSS protection in browsers
@@ -230,9 +246,6 @@ if not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True # Enforce HSTS on all subdomains
     SECURE_HSTS_PRELOAD = True # Allow site to be included in browser preload lists
     X_FRAME_OPTIONS = 'DENY' # Prevent clickjacking
-    #SECURE_CONTENT_TYPE_NOSNIFF = True # Prevent MIME type sniffing
-    #SECURE_BROWSER_XSS_FILTER = True
-    #X_FRAME_OPTIONS = "DENY"
     SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin" # Control referrer information sent with requests
     
     # Trust Railway's proxy headers
@@ -256,6 +269,12 @@ LOGGING = {
 
 LOGIN_URL = 'login'
 
+# CORS Configuration
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
 # MPESA Configuration
 MPESA_CONSUMER_KEY = os.environ.get('MPESA_CONSUMER_KEY')
 MPESA_CONSUMER_SECRET = os.environ.get('MPESA_CONSUMER_SECRET')
@@ -266,3 +285,11 @@ MPESA_TILL_NUMBER = os.environ.get('MPESA_TILL_NUMBER')
 ACCOUNT_NUMBER = os.environ.get('ACCOUNT_NUMBER')
 MPESA_CALLBACK_URL = os.environ.get('MPESA_CALLBACK_URL')
 MPESA_PRODUCTION = os.environ.get('MPESA_PRODUCTION')  # 'True' for production, 'sandbox' for testing
+
+PAYHERO_AUTH_TOKEN = 'Basic S2FYeVdZcTZ2RHZKRkhORGhRZGU6ZTRoWEl6bnJWMEZUS2U4WlB0UTZFZGFLbjE4cWRaSzRpdndLVFBUbg=='
+PAYHERO_API_PASSWORD = 'e4hXIznrV0FTKe8ZPtQ6EdaKn18qdZK4ivwKTPTn'
+PAYHERO_API_USERNAME = 'KaXyWYq6vDvJFHNDhQde'
+
+FLUTTERWAVE_PUBLIC_KEY = os.environ.get('FLUTTERWAVE_PUBLIC_KEY', '')
+FLUTTERWAVE_SECRET_KEY = os.environ.get('FLUTTERWAVE_SECRET_KEY', '')
+FLUTTERWAVE_WEBHOOK_SECRET = os.environ.get('FLUTTERWAVE_WEBHOOK_SECRET', '')

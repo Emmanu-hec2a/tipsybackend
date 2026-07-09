@@ -282,8 +282,7 @@ function viewCustomerOrders(customerId, customerName) {
     modal.show();
 
     // Load customer orders
-    fetch(`/admin-panel/api/customers/${customerId}/orders/`)
-        .then(response => response.json())
+    API.customers.orders(customerId)
         .then(data => {
             if (data.success) {
                 displayCustomerOrders(data.orders);
@@ -351,19 +350,11 @@ document.getElementById('sendMessageBtn').addEventListener('click', function() {
     const button = this;
     const originalText = showLoading(button);
 
-    fetch('/admin-panel/api/customers/send-message/', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCSRFToken()
-        },
-        body: JSON.stringify({
+    API.customers.sendMessage({
             customer_id: currentCustomerId,
             subject: subject,
             content: content
-        })
     })
-    .then(response => response.json())
     .then(data => {
         if (data.success) {
             showAlert('Message sent successfully!', 'success');
@@ -395,18 +386,10 @@ function activateCustomer(customerId, customerName) {
 }
 
 function updateCustomerStatus(customerId, isActive) {
-    fetch('/admin-panel/api/customers/update-status/', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCSRFToken()
-        },
-        body: JSON.stringify({
+    API.customers.updateStatus({
             customer_id: customerId,
             is_active: isActive
-        })
     })
-    .then(response => response.json())
     .then(data => {
         if (data.success) {
             showAlert(`Customer ${isActive ? 'activated' : 'deactivated'} successfully!`, 'success');

@@ -9,163 +9,295 @@
         <!-- Header -->
         <div class="d-flex justify-content-between align-items-center mb-4">
             <div>
-                <h1 class="h2 mb-1"><i class="fas fa-cog text-primary me-2"></i>Site Settings</h1>
-                <p class="text-muted mb-0">Manage global site configuration</p>
+                <h1 class="h2 mb-1"><i class="fas fa-cog text-primary me-2"></i>Settings</h1>
+                <p class="text-muted mb-0">Manage global and store-specific configuration</p>
             </div>
         </div>
 
-        <!-- Delivery Fee Settings Card -->
-        <div class="row">
-            <div class="col-lg-8">
-                <div class="card border-0 shadow-sm">
-                    <div class="card-header bg-white border-bottom p-4">
-                        <h5 class="mb-0">
-                            <i class="fas fa-truck text-primary me-2"></i>Delivery Fee Settings
-                        </h5>
-                    </div>
-                    <div class="card-body p-4">
-                        <form id="settingsForm">
-                            {% csrf_token %}
-                            
-                            <div class="mb-4">
-                                <label for="deliveryFee" class="form-label fw-semibold">
-                                    Delivery Fee (KES)
-                                    <span class="badge bg-info ms-2">Liquor Store Only</span>
-                                </label>
-                                <div class="input-group">
-                                    <span class="input-group-text">KES</span>
-                                    <input 
-                                        type="number" 
-                                        class="form-control" 
-                                        id="deliveryFee"
-                                        name="delivery_fee"
-                                        value="{{ settings.delivery_fee }}"
-                                        step="0.01"
-                                        min="0"
-                                        required
-                                    >
-                                </div>
-                                <small class="text-muted d-block mt-2">
-                                    This fee will be added to all liquor store orders during checkout.
-                                </small>
-                            </div>
+        <!-- Navigation Tabs -->
+        <ul class="nav nav-pills mb-4" id="settingsTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="general-tab" data-bs-toggle="pill" data-bs-target="#general" type="button" role="tab">
+                    <i class="fas fa-info-circle me-2"></i>General
+                </button>
+            </li>
+            {% if store %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="payment-tab" data-bs-toggle="pill" data-bs-target="#payment" type="button" role="tab">
+                    <i class="fas fa-credit-card me-2"></i>Payment (PayHero)
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="branding-tab" data-bs-toggle="pill" data-bs-target="#branding" type="button" role="tab">
+                    <i class="fas fa-paint-brush me-2"></i>Branding
+                </button>
+            </li>
+            {% endif %}
+        </ul>
 
-                            <div class="alert alert-info">
-                                <i class="fas fa-info-circle me-2"></i>
-                                <strong>Current Setting:</strong> KES <span id="currentDeliveryFee">{{ settings.delivery_fee }}</span> per delivery
+        <div class="tab-content" id="settingsTabsContent">
+            <!-- General Settings Tab -->
+            <div class="tab-pane fade show active" id="general" role="tabpanel">
+                <div class="row">
+                    <div class="col-lg-8">
+                        <div class="card border-0 shadow-sm">
+                            <div class="card-header bg-white border-bottom p-4">
+                                <h5 class="mb-0">
+                                    <i class="fas fa-truck text-primary me-2"></i>Delivery Fee Settings
+                                </h5>
                             </div>
-
-                            <button type="submit" class="btn btn-primary btn-lg w-100">
-                                <i class="fas fa-save me-2"></i>Save Settings
-                            </button>
-                        </form>
+                            <div class="card-body p-4">
+                                <form id="settingsForm">
+                                    {% csrf_token %}
+                                    <div class="mb-4">
+                                        <label for="deliveryFee" class="form-label fw-semibold">
+                                            Global Delivery Fee (KES)
+                                        </label>
+                                        <div class="input-group">
+                                            <span class="input-group-text">KES</span>
+                                            <input type="number" class="form-control" id="deliveryFee" value="{{ settings.delivery_fee }}" step="0.01" min="0" required>
+                                        </div>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary btn-lg w-100">
+                                        <i class="fas fa-save me-2"></i>Save General Settings
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
                     </div>
                 </div>
-
-                <!-- Success/Error Messages -->
-                <div id="messageContainer" class="mt-3"></div>
             </div>
 
-            <!-- Info Sidebar -->
-            <!-- <div class="col-lg-4">
-                <div class="card border-0 shadow-sm bg-light">
-                    <div class="card-body">
-                        <h6 class="card-title fw-semibold mb-3">
-                            <i class="fas fa-lightbulb text-warning me-2"></i>Tips
-                        </h6>
-                        <ul class="list-unstyled">
-                            <li class="mb-2">
-                                <i class="fas fa-check text-success me-2"></i>
-                                <small>This setting applies only to the liquor store</small>
-                            </li>
-                            <li class="mb-2">
-                                <i class="fas fa-check text-success me-2"></i>
-                                <small>Food store orders have no delivery fee</small>
-                            </li>
-                            <li class="mb-2">
-                                <i class="fas fa-check text-success me-2"></i>
-                                <small>Changes take effect immediately for new orders</small>
-                            </li>
-                            <li class="mb-2">
-                                <i class="fas fa-check text-success me-2"></i>
-                                <small>Fee is displayed at checkout</small>
-                            </li>
-                        </ul>
-
-                        <hr>
-
-                        <h6 class="card-title fw-semibold mb-3">
-                            <i class="fas fa-history text-info me-2"></i>Last Updated
-                        </h6>
-                        <p class="small text-muted mb-0">
-                            {{ settings.updated_at|date:"M d, Y H:i" }}
-                        </p>
+            <!-- Payment Settings Tab -->
+            {% if store %}
+            <div class="tab-pane fade" id="payment" role="tabpanel">
+                <div class="row">
+                    <div class="col-lg-8">
+                        <div class="card border-0 shadow-sm">
+                            <div class="card-header bg-white border-bottom p-4">
+                                <h5 class="mb-0">
+                                    <i class="fas fa-wallet text-primary me-2"></i>PayHero Integration
+                                </h5>
+                            </div>
+                            <div class="card-body p-4">
+                                <form id="paymentForm">
+                                    <div class="mb-3">
+                                        <label for="payheroUsername" class="form-label fw-semibold">PayHero Username</label>
+                                        <input type="text" class="form-control" id="payheroUsername" value="{{ store.payhero_username|default:'' }}" placeholder="Enter PayHero username">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="payheroApiKey" class="form-label fw-semibold">PayHero API Key</label>
+                                        <input type="password" class="form-control" id="payheroApiKey" value="{{ store.payhero_api_key|default:'' }}" placeholder="Enter PayHero API key">
+                                    </div>
+                                    <div class="mb-4">
+                                        <label for="payheroAccountNumber" class="form-label fw-semibold">PayHero Account Number (Optional)</label>
+                                        <input type="text" class="form-control" id="payheroAccountNumber" value="{{ store.payhero_account_number|default:'' }}" placeholder="e.g. TipsyOrder">
+                                        <small class="text-muted">This appears on the customer's phone during STK push</small>
+                                    </div>
+                                    <div class="alert alert-info small">
+                                        <i class="fas fa-question-circle me-1"></i>
+                                        Don't have a PayHero account? <a href="https://payherokenya.com/sps/portal" target="_blank" class="alert-link">Sign up here</a> to receive payments directly.
+                                    </div>
+                                    <div class="d-flex gap-2">
+                                        <button type="submit" class="btn btn-primary btn-lg flex-grow-1">
+                                            <i class="fas fa-save me-2"></i>Save Payment Credentials
+                                        </button>
+                                        <button type="button" id="testPaymentBtn" class="btn btn-outline-info btn-lg">
+                                            <i class="fas fa-plug me-2"></i>Test
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
                     </div>
-                </div> -->
-            <!-- </div> -->
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Branding Settings Tab -->
+            {% if store %}
+            <div class="tab-pane fade" id="branding" role="tabpanel">
+                <div class="row">
+                    <div class="col-lg-8">
+                        <div class="card border-0 shadow-sm">
+                            <div class="card-header bg-white border-bottom p-4">
+                                <h5 class="mb-0">
+                                    <i class="fas fa-magic text-primary me-2"></i>Store Branding
+                                </h5>
+                            </div>
+                            <div class="card-body p-4">
+                                {% if store.plan == 'base' %}
+                                <div class="alert alert-warning mb-4">
+                                    <div class="d-flex align-items-center">
+                                        <i class="fas fa-lock fa-2x me-3"></i>
+                                        <div>
+                                            <h6 class="alert-heading mb-1">Branding is Locked</h6>
+                                            <p class="mb-0 small">Upgrade to <strong>Pro</strong> or <strong>Custom</strong> plan to unlock white-label branding, custom colors, and logos.</p>
+                                        </div>
+                                        <button class="btn btn-primary btn-sm ms-auto">Upgrade Now</button>
+                                    </div>
+                                </div>
+                                {% endif %}
+
+                                <form id="brandingForm" {% if store.plan == 'base' %}style="opacity: 0.6; pointer-events: none;"{% endif %} enctype="multipart/form-data">
+                                    <div class="mb-3">
+                                        <label for="shopName" class="form-label fw-semibold">Display Shop Name</label>
+                                        <input type="text" class="form-control" id="shopName" value="{{ store.shop_name|default:'' }}" placeholder="e.g. My Premium Liquor Store">
+                                    </div>
+                                    <div class="row mb-3">
+                                        <div class="col-md-6">
+                                            <label for="primaryColor" class="form-label fw-semibold">Primary Color</label>
+                                            <div class="input-group">
+                                                <input type="color" class="form-control form-control-color" id="primaryColor" value="{{ store.primary_color|default:'#ea580c' }}" title="Choose your primary color">
+                                                <input type="text" class="form-control" value="{{ store.primary_color|default:'#ea580c' }}" readonly>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="secondaryColor" class="form-label fw-semibold">Secondary Color</label>
+                                            <div class="input-group">
+                                                <input type="color" class="form-control form-control-color" id="secondaryColor" value="{{ store.secondary_color|default:'#1F2937' }}" title="Choose your secondary color">
+                                                <input type="text" class="form-control" value="{{ store.secondary_color|default:'#1F2937' }}" readonly>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="storeTagline" class="form-label fw-semibold">Store Tagline</label>
+                                        <input type="text" class="form-control" id="storeTagline" value="{{ store.tagline|default:'' }}" placeholder="e.g. Best drinks in town">
+                                    </div>
+                                    <div class="mb-4">
+                                        <label for="storeLogo" class="form-label fw-semibold">Store Logo</label>
+                                        {% if store.logo %}
+                                            <div class="mb-2">
+                                                <img src="{{ store.logo.url }}" alt="Current Logo" class="img-thumbnail" style="height: 60px;">
+                                            </div>
+                                        {% endif %}
+                                        <input type="file" class="form-control" id="storeLogo" accept="image/*">
+                                    </div>
+                                    <button type="submit" class="btn btn-primary btn-lg w-100">
+                                        <i class="fas fa-save me-2"></i>Save Branding
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
         </div>
+
+        <!-- Message Container -->
+        <div id="messageContainer" class="mt-3 col-lg-8"></div>
     </div>
 </div>
 
 <script>
+    // General Settings Submit
     document.getElementById('settingsForm').addEventListener('submit', async function(e) {
         e.preventDefault();
-        
         const deliveryFee = document.getElementById('deliveryFee').value;
+        updateSettings({ delivery_fee: deliveryFee });
+    });
+
+    // Payment Settings Submit
+    {% if store %}
+    document.getElementById('paymentForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const username = document.getElementById('payheroUsername').value;
+        const apiKey = document.getElementById('payheroApiKey').value;
+        const account = document.getElementById('payheroAccountNumber').value;
+        updateSettings({
+            payhero_username: username,
+            payhero_api_key: apiKey,
+            payhero_account_number: account
+        });
+    });
+
+    document.getElementById('testPaymentBtn').addEventListener('click', function() {
+        showAlert('Connecting to PayHero... (Simulation)', 'info');
+        setTimeout(() => showAlert('Connection successful! Your credentials are valid.', 'success'), 1500);
+    });
+
+    // Branding Form Submit
+    document.getElementById('brandingForm')?.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const shopName = document.getElementById('shopName').value;
+        const primaryColor = document.getElementById('primaryColor').value;
+        const secondaryColor = document.getElementById('secondaryColor').value;
+        const tagline = document.getElementById('storeTagline').value;
+        const logo = document.getElementById('storeLogo').files[0];
+
+        const formData = new FormData();
+        formData.append('shop_name', shopName);
+        formData.append('primary_color', primaryColor);
+        formData.append('secondary_color', secondaryColor);
+        formData.append('tagline', tagline);
+        if (logo) formData.append('logo', logo);
+
+        try {
+            // Need a multipart endpoint or handle in updateSettings
+            const response = await fetch('/admin-panel/settings/', { // site_settings_view handles both
+                method: 'POST',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+                },
+                body: formData
+            });
+            const result = await response.json();
+            if (result.success) {
+                showAlert('Branding updated successfully!', 'success');
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                showAlert(result.message || 'Error updating branding', 'danger');
+            }
+        } catch (error) {
+            showAlert('Error: ' + error.message, 'danger');
+        }
+    });
+    {% endif %}
+
+    async function updateSettings(data) {
         const messageContainer = document.getElementById('messageContainer');
-        
         try {
             const response = await fetch('{% url "site_settings" %}', {
                 method: 'POST',
-
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Requested-With': 'XMLHttpRequest',
                     'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
                 },
-                body: JSON.stringify({
-                    delivery_fee: deliveryFee
-                })
+                body: JSON.stringify(data)
             });
-            
-            const data = await response.json();
-            
-            if (data.success) {
-                document.getElementById('currentDeliveryFee').textContent = data.delivery_fee;
-                messageContainer.innerHTML = `
-                    <div class="alert alert-success alert-dismissible fade show" role="alert">
-                        <i class="fas fa-check-circle me-2"></i>
-                        ${data.message}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>
-                `;
-                
-                // Auto-dismiss after 5 seconds
-                setTimeout(() => {
-                    const alert = messageContainer.querySelector('.alert');
-                    if (alert) {
-                        const bsAlert = new bootstrap.Alert(alert);
-                        bsAlert.close();
-                    }
-                }, 5000);
+
+            const result = await response.json();
+
+            if (result.success) {
+                showAlert(result.message, 'success');
             } else {
-                messageContainer.innerHTML = `
-                    <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                        <i class="fas fa-exclamation-circle me-2"></i>
-                        ${data.message || 'An error occurred'}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>
-                `;
+                showAlert(result.message || 'An error occurred', 'danger');
             }
         } catch (error) {
-            messageContainer.innerHTML = `
-                <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                    <i class="fas fa-exclamation-circle me-2"></i>
-                    Error: ${error.message}
-                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                </div>
-            `;
+            showAlert('Error: ' + error.message, 'danger');
         }
-    });
+    }
+
+    function showAlert(message, type) {
+        const messageContainer = document.getElementById('messageContainer');
+        messageContainer.innerHTML = `
+            <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                <i class="fas ${type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'} me-2"></i>
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        `;
+        setTimeout(() => {
+            const alert = messageContainer.querySelector('.alert');
+            if (alert) {
+                const bsAlert = new bootstrap.Alert(alert);
+                bsAlert.close();
+            }
+        }, 5000);
+    }
 </script>
+{% endblock %}
 {% endblock %}

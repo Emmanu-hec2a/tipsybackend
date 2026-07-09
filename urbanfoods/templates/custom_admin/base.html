@@ -22,6 +22,8 @@
     <!-- Custom Admin CSS -->
     <link rel="stylesheet" href="{% static 'admin.css' %}">
 
+    <script src="{% static 'js/api.js' %}"></script>
+
     {% block extra_css %}{% endblock %}
 
     <style>
@@ -1053,8 +1055,7 @@
         let lastNotificationCheck = new Date().toISOString();
 
         function checkNotifications() {
-            fetch(`/admin-panel/api/orders/new/?last_check=${lastNotificationCheck}`)
-                .then(response => response.json())
+            API.orders.new(lastNotificationCheck)
                 .then(data => {
                     if (data.success && data.new_orders_count > 0) {
                         updateNotificationBadge(data.new_orders_count);

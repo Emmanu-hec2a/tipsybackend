@@ -154,26 +154,16 @@ if (deliveryGuyForm) {
         const phone = document.getElementById('deliveryGuyPhone').value;
         const isActive = document.getElementById('deliveryGuyActive').checked;
 
-        const method = deliveryGuyId ? 'PUT' : 'POST';
-        const url = deliveryGuyId
-            ? `/admin-panel/api/delivery-guys/${deliveryGuyId}/`
-            : '/admin-panel/api/delivery-guys/add/';
+        const apiCall = deliveryGuyId
+            ? (data) => API.riders.edit(deliveryGuyId, data)
+            : API.riders.add;
 
         try {
-            const response = await fetch(url, {
-                method: method,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': csrfToken
-                },
-                body: JSON.stringify({
-                    name: name,
-                    phone_number: phone,
-                    is_active: isActive
-                })
+            const data = await apiCall({
+                name: name,
+                phone_number: phone,
+                is_active: isActive
             });
-
-            const data = await response.json();
 
             if (data.success) {
                 showToast(data.message, 'success');

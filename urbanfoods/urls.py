@@ -7,6 +7,7 @@ app_name = 'urbanfoods'
 urlpatterns = [
     # Public pages
     path('', views.homepage, name='homepage'),
+    path('shop/<slug:subdomain>/', views.homepage, name='store_home'),
     path('offline/', views.offline, name='offline'),
 
     # Authentication
@@ -49,5 +50,19 @@ urlpatterns = [
     
     # Admin - Site Settings
     path('admin/settings/', admin_views.site_settings_view, name='site_settings'),
+
+    # API v1
+    path('api/geocode/reverse/', views.reverse_geocode, name='reverse_geocode'),
+    path('api/v1/auth/customer/login/', views.CustomerLoginView.as_view(), name='api_customer_login'),
+    path('api/v1/auth/partner/login/', views.PartnerLoginView.as_view(), name='api_partner_login'),
+    path('api/v1/auth/rider/login/', views.RiderLoginView.as_view(), name='api_rider_login'),
+    path('api/v1/auth/partner/signup/', views.PartnerSignupView.as_view(), name='api_partner_signup'),
+    path('api/v1/auth/partner/approve/<int:user_id>/', views.PartnerApprovalView.as_view(), name='api_partner_approve'),
+    
+    # Test endpoints
+    path('api/v1/test/customer/', views.TestCustomerView.as_view(), name='test_customer'),
+    path('api/v1/test/partner/', views.TestPartnerView.as_view(), name='test_partner'),
+    path('api/v1/test/rider/', views.TestRiderView.as_view(), name='test_rider'),
+    path('api/v1/test/superadmin/', views.TestSuperAdminView.as_view(), name='test_superadmin'),
 ]
 

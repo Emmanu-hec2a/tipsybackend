@@ -315,13 +315,7 @@ function cancelOrder(orderNumber) {
 }
 
 function showPaymentDetails(orderNumber) {
-    fetch(`/admin-panel/api/orders/payment-details/${orderNumber}/`, {
-        method: 'GET',
-        headers: {
-            'X-CSRFToken': getCSRFToken()
-        }
-    })
-    .then(response => response.json())
+    API.orders.paymentDetails(orderNumber)
     .then(data => {
         if (data.success) {
             document.getElementById('paymentReceipt').textContent = data.payment_details.mpesa_receipt_number || '-';
@@ -348,19 +342,11 @@ document.getElementById('confirmStatusUpdate').addEventListener('click', functio
     const button = this;
     const originalText = showLoading(button);
 
-    fetch('/admin-panel/api/orders/update-status/', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCSRFToken()
-        },
-        body: JSON.stringify({
-            order_number: currentOrderNumber,
-            status: currentNewStatus,
-            notes: notes
-        })
+    API.orders.updateStatus({
+        order_number: currentOrderNumber,
+        status: currentNewStatus,
+        notes: notes
     })
-    .then(response => response.json())
     .then(data => {
         if (data.success) {
             showAlert(data.message, 'success');
@@ -388,18 +374,10 @@ document.getElementById('confirmCancelOrder').addEventListener('click', function
     const button = this;
     const originalText = showLoading(button);
 
-    fetch('/admin-panel/api/orders/cancel/', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCSRFToken()
-        },
-        body: JSON.stringify({
-            order_number: currentOrderNumber,
-            reason: reason + (notes ? ': ' + notes : '')
-        })
+    API.orders.cancel({
+        order_number: currentOrderNumber,
+        reason: reason + (notes ? ': ' + notes : '')
     })
-    .then(response => response.json())
     .then(data => {
         if (data.success) {
             showAlert(data.message, 'success');
@@ -424,8 +402,7 @@ document.getElementById('confirmCancelOrder').addEventListener('click', function
 setInterval(() => {
     if (document.visibilityState === 'visible') {
         // Only refresh if page is visible
-        fetch('/admin-panel/api/orders/new/')
-            .then(response => response.json())
+        API.orders.new()
             .then(data => {
                 if (data.success && data.new_orders_count > 0) {
                     // Show notification about new orders

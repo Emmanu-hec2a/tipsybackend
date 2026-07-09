@@ -1,39 +1,43 @@
 from django.contrib import admin
-from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from unfold.admin import ModelAdmin
 from .models import *
 
 @admin.register(User)
-class CustomUserAdmin(UserAdmin):
-    list_display = ('username', 'email', 'phone_number', 'loyalty_points', 'is_verified', 'is_staff')
-    list_filter = ('is_staff', 'is_verified', 'date_joined')
-    search_fields = ('username', 'email', 'phone_number')
+class CustomUserAdmin(BaseUserAdmin, ModelAdmin):
+    list_display = ('username', 'email', 'phone', 'role', 'assigned_store', 'is_approved', 'is_staff')
+    list_filter = ('role', 'is_staff', 'is_approved', 'is_verified', 'date_joined')
+    search_fields = ('username', 'email', 'phone', 'business_name')
     ordering = ('-date_joined',)
 
-    fieldsets = UserAdmin.fieldsets + (
-        ('Additional Info', {'fields': ('phone_number', 'default_hostel', 'default_room', 'student_email', 'loyalty_points', 'is_verified')}),
+    fieldsets = BaseUserAdmin.fieldsets + (
+        ('SaaS Info', {'fields': ('role', 'phone', 'business_name', 'business_location', 'is_approved', 'assigned_store', 'is_available', 'telegram_chat_id', 'fcm_token')}),
+        ('Rider Stats', {'fields': ('total_deliveries', 'avg_rating', 'acceptance_rate')}),
+        ('Bank Info', {'fields': ('bank_account_name', 'bank_account_number', 'bank_name')}),
+        ('Legacy Info', {'fields': ('phone_number', 'default_hostel', 'default_room', 'student_email', 'loyalty_points', 'is_verified')}),
     )
 
 @admin.register(FoodCategory)
-class FoodCategoryAdmin(admin.ModelAdmin):
+class FoodCategoryAdmin(ModelAdmin):
     list_display = ('name', 'order', 'icon')
     list_editable = ('order',)
     search_fields = ('name',)
     ordering = ('order', 'name')
 
 @admin.register(FoodItem)
-class FoodItemAdmin(admin.ModelAdmin):
-    list_display = ('name', 'category', 'price', 'is_available', 'is_featured', 'times_ordered')
-    list_filter = ('category', 'is_available', 'is_featured', 'is_meal_of_day')
-    search_fields = ('name', 'description')
-    list_editable = ('price', 'is_available', 'is_featured')
+class FoodItemAdmin(ModelAdmin):
+    list_display = ('name', 'category', 'category_fkey', 'price', 'is_available', 'is_active', 'sku')
+    list_filter = ('category', 'category_fkey', 'is_available', 'is_active', 'store')
+    search_fields = ('name', 'description', 'sku')
+    list_editable = ('price', 'is_available', 'is_active')
     ordering = ('-is_featured', '-times_ordered', 'name')
 
     fieldsets = (
         ('Basic Information', {
-            'fields': ('name', 'description', 'category', 'price', 'image')
+            'fields': ('store', 'name', 'description', 'category', 'category_fkey', 'sku', 'price', 'original_price', 'discount_percent', 'image')
         }),
         ('Availability & Features', {
-            'fields': ('is_available', 'is_featured', 'is_meal_of_day', 'prep_time')
+            'fields': ('is_available', 'is_active', 'is_featured', 'is_meal_of_day', 'prep_time', 'stock', 'low_stock_threshold')
         }),
         ('Statistics', {
             'fields': ('times_ordered',),
@@ -42,22 +46,22 @@ class FoodItemAdmin(admin.ModelAdmin):
     )
 
 @admin.register(Order)
-class OrderAdmin(admin.ModelAdmin):
-    list_display = ('order_number', 'user', 'store_type', 'status', 'delivery_guy', 'total', 'payment_method', 'payment_status', 'payment_type', 'mpesa_receipt_number', 'payment_completed_at', 'created_at')
-    list_filter = ('status', 'store_type', 'payment_status', 'payment_type', 'created_at', 'estimated_delivery', 'delivery_guy')
+class OrderAdmin(ModelAdmin):
+    list_display = ('order_number', 'user', 'store_type', 'status', 'assigned_rider', 'total', 'payment_method', 'payment_status', 'payment_type', 'mpesa_receipt_number', 'payment_completed_at', 'created_at')
+    list_filter = ('status', 'store_type', 'payment_status', 'payment_type', 'created_at', 'estimated_delivery', 'assigned_rider')
     search_fields = ('order_number', 'user__username', 'user__email', 'mpesa_receipt_number')
     readonly_fields = ('order_number', 'created_at', 'updated_at', 'payment_completed_at', 'mpesa_checkout_request_id', 'mpesa_transaction_date')
     ordering = ('-created_at',)
 
     fieldsets = (
         ('Order Information', {
-            'fields': ('order_number', 'user', 'store_type', 'status', 'created_at', 'updated_at')
+            'fields': ('order_number', 'user', 'store', 'store_type', 'status', 'created_at', 'updated_at')
         }),
         ('Delivery Details', {
-            'fields': ('hostel', 'room_number', 'phone_number', 'delivery_notes', 'delivery_guy', 'estimated_delivery', 'delivered_at')
+            'fields': ('hostel', 'room_number', 'phone_number', 'latitude', 'longitude', 'address_string', 'google_maps_link', 'delivery_notes', 'assigned_rider', 'estimated_delivery', 'delivered_at')
         }),
         ('Pricing', {
-            'fields': ('subtotal', 'delivery_fee', 'total', 'rating', 'review')
+            'fields': ('subtotal', 'delivery_fee', 'tip_amount', 'rider_base_fare', 'total', 'rating_value', 'review_text')
         }),
         ('Payment Information', {
             'fields': ('payment_method', 'payment_status', 'payment_type', 'payment_completed_at', 'payment_failure_reason', 'mpesa_checkout_request_id', 'mpesa_receipt_number', 'mpesa_transaction_date'),
@@ -66,28 +70,28 @@ class OrderAdmin(admin.ModelAdmin):
     )
 
 @admin.register(OrderItem)
-class OrderItemAdmin(admin.ModelAdmin):
+class OrderItemAdmin(ModelAdmin):
     list_display = ('order', 'food_item', 'quantity', 'price_at_order', 'subtotal')
     list_filter = ('order__status', 'food_item__category')
     search_fields = ('order__order_number', 'food_item__name')
     readonly_fields = ('subtotal',)
 
 @admin.register(OrderStatusHistory)
-class OrderStatusHistoryAdmin(admin.ModelAdmin):
+class OrderStatusHistoryAdmin(ModelAdmin):
     list_display = ('order', 'status', 'timestamp', 'notes')
     list_filter = ('status', 'timestamp')
     search_fields = ('order__order_number', 'notes')
     readonly_fields = ('timestamp',)
 
 @admin.register(FoodReview)
-class FoodReviewAdmin(admin.ModelAdmin):
+class FoodReviewAdmin(ModelAdmin):
     list_display = ('user', 'food_item', 'order', 'rating', 'created_at')
     list_filter = ('rating', 'created_at')
     search_fields = ('user__username', 'food_item__name', 'comment')
     readonly_fields = ('created_at',)
 
 @admin.register(Promotion)
-class PromotionAdmin(admin.ModelAdmin):
+class PromotionAdmin(ModelAdmin):
     list_display = ('title', 'code', 'discount_percentage', 'discount_amount', 'is_active', 'start_date', 'end_date')
     list_filter = ('is_active', 'start_date', 'end_date')
     search_fields = ('title', 'code', 'description')
@@ -105,8 +109,43 @@ class PromotionAdmin(admin.ModelAdmin):
         }),
     )
 
+@admin.register(Store)
+class StoreAdmin(ModelAdmin):
+    list_display = ('name', 'owner', 'subdomain', 'is_active', 'plan', 'subscription_active')
+    list_filter = ('is_active', 'plan', 'subscription_active', 'billing_status')
+    search_fields = ('name', 'subdomain', 'owner__username')
+    prepopulated_fields = {'subdomain': ('name',)}
+
+@admin.register(Rating)
+class RatingAdmin(ModelAdmin):
+    list_display = ('order', 'customer', 'store', 'store_rating', 'rider_rating', 'created_at')
+    list_filter = ('store_rating', 'rider_rating', 'created_at')
+    search_fields = ('order__order_number', 'customer__username', 'comment')
+
+@admin.register(RiderEarning)
+class RiderEarningAdmin(ModelAdmin):
+    list_display = ('rider', 'order', 'base_fare', 'tip', 'total', 'created_at')
+    list_filter = ('created_at',)
+    search_fields = ('rider__username', 'order__order_number')
+
+@admin.register(RiderLocationPing)
+class RiderLocationPingAdmin(ModelAdmin):
+    list_display = ('rider', 'order', 'latitude', 'longitude', 'created_at')
+    list_filter = ('created_at',)
+    search_fields = ('rider__username', 'order__order_number')
+
+@admin.register(SubscriptionPayment)
+class SubscriptionPaymentAdmin(ModelAdmin):
+    list_display = ('store', 'amount', 'status', 'mpesa_receipt', 'created_at')
+    list_filter = ('status', 'created_at')
+    search_fields = ('store__name', 'mpesa_receipt')
+
+@admin.register(PlatformConfig)
+class PlatformConfigAdmin(ModelAdmin):
+    list_display = ('daraja_shortcode',)
+
 @admin.register(DeliveryGuy)
-class DeliveryGuyAdmin(admin.ModelAdmin):
+class DeliveryGuyAdmin(ModelAdmin):
     list_display = ('name', 'phone_number', 'is_active', 'total_deliveries', 'created_at')
     list_filter = ('is_active', 'created_at')
     search_fields = ('name', 'phone_number')
@@ -128,7 +167,7 @@ class DeliveryGuyAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at', 'updated_at')
 
 @admin.register(SiteSettings)
-class SiteSettingsAdmin(admin.ModelAdmin):
+class SiteSettingsAdmin(ModelAdmin):
     list_display = ('delivery_fee', 'updated_at')
     
     fieldsets = (
