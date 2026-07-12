@@ -34,6 +34,12 @@ class User(AbstractUser):
     bank_name = models.CharField(max_length=100, null=True, blank=True)
     fcm_token = models.CharField(max_length=255, null=True, blank=True)
 
+    # Age Verification & Risk Signals
+    date_of_birth = models.DateField(null=True, blank=True)
+    is_age_verified = models.BooleanField(default=False)
+    risk_score = models.IntegerField(default=0, help_text="Calculated risk score (0-100)")
+    verification_metadata = models.JSONField(default=dict, blank=True, help_text="Silent sentry behavior signals")
+
     # Legacy/Existing fields
     phone_number = models.CharField(max_length=15, blank=True)
     default_hostel = models.CharField(max_length=100, blank=True)
@@ -62,6 +68,11 @@ class Store(models.Model):
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=200.0)
     delivery_radius_km = models.IntegerField(default=7)
+
+    # Dynamic Fee Overrides (if null, uses SiteSettings)
+    base_delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    base_distance_km = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    extra_distance_surcharge = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
     # Branding
     shop_name = models.CharField(max_length=200, null=True, blank=True)
@@ -93,22 +104,12 @@ class Store(models.Model):
     last_payment_date = models.DateField(null=True, blank=True)
     last_expiry_reminder_sent = models.DateField(null=True, blank=True)
 
-    # PayHero (Rail 1 — order payments only)
-    payhero_username = models.CharField(max_length=200, null=True, blank=True)
-    payhero_api_key = models.CharField(max_length=200, null=True, blank=True)
-    payhero_account_number = models.CharField(max_length=50, null=True, blank=True)
-
-    # Flutterwave / platform-managed payments
-    payment_provider = models.CharField(
-        max_length=20,
-        choices=[('flutterwave', 'Flutterwave'), ('manual', 'Manual')],
-        default='flutterwave'
-    )
-    flutterwave_enabled = models.BooleanField(default=True)
-    flutterwave_public_key = models.CharField(max_length=255, null=True, blank=True)
-    flutterwave_secret_key = models.CharField(max_length=255, null=True, blank=True)
-    flutterwave_webhook_secret = models.CharField(max_length=255, null=True, blank=True)
-    flutterwave_currency = models.CharField(max_length=10, default='KES')
+    # M-Pesa Daraja Integration (Store-specific, Encrypted)
+    mpesa_consumer_key = models.TextField(null=True, blank=True, help_text="Encrypted Consumer Key")
+    mpesa_consumer_secret = models.TextField(null=True, blank=True, help_text="Encrypted Consumer Secret")
+    mpesa_passkey = models.TextField(null=True, blank=True, help_text="Encrypted Passkey")
+    mpesa_shortcode = models.CharField(max_length=50, null=True, blank=True, help_text="Business Short Code")
+    mpesa_callback_url = models.URLField(null=True, blank=True, help_text="Store-specific callback URL")
 
     telegram_chat_id = models.CharField(max_length=100, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -129,6 +130,19 @@ class Store(models.Model):
             return f"{rgb[0]}, {rgb[1]}, {rgb[2]}"
         except Exception:
             return "234, 88, 12" # Fallback orange-600
+
+class MarketingBlast(models.Model):
+    """History of marketing notifications sent by merchants"""
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='blasts')
+    message = models.TextField()
+    target_count = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        
+    def __str__(self):
+        return f"{self.store.name} - {self.created_at.date()}"
 
 class FoodCategory(models.Model):
     """Categories for organizing food items"""
@@ -319,6 +333,11 @@ class Order(models.Model):
     delivery_window_start = models.TimeField(null=True, blank=True)
     delivery_window_end = models.TimeField(null=True, blank=True)
 
+    # Verification Handshake
+    requires_rider_verification = models.BooleanField(default=False)
+    rider_verified_at = models.DateTimeField(null=True, blank=True)
+    rider_verification_method = models.CharField(max_length=50, null=True, blank=True)
+
     order_number = models.CharField(max_length=20, unique=True, editable=False)
     is_test_order = models.BooleanField(default=False)
     has_reviewed_items = models.BooleanField(default=False)
@@ -447,17 +466,21 @@ class FoodReview(models.Model):
 
 class Promotion(models.Model):
     """Promotional offers and deals"""
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='promotions', null=True, blank=True)
     title = models.CharField(max_length=200)
-    description = models.TextField()
-    code = models.CharField(max_length=20, unique=True, blank=True)
+    description = models.TextField(blank=True)
+    code = models.CharField(max_length=20)
     discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     min_order_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     is_active = models.BooleanField(default=True)
-    start_date = models.DateTimeField()
+    start_date = models.DateTimeField(auto_now_add=True)
     end_date = models.DateTimeField()
     usage_limit = models.IntegerField(null=True, blank=True)
     times_used = models.IntegerField(default=0)
+    
+    class Meta:
+        unique_together = ['store', 'code']
     
     def __str__(self):
         return self.title
@@ -562,13 +585,22 @@ class SubscriptionPayment(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 class PlatformConfig(models.Model):
-    daraja_consumer_key = models.CharField(max_length=200)
-    daraja_consumer_secret = models.CharField(max_length=200)
-    daraja_shortcode = models.CharField(max_length=20)
-    daraja_passkey = models.CharField(max_length=200)
+    daraja_consumer_key = models.TextField(help_text="Encrypted Consumer Key")
+    daraja_consumer_secret = models.TextField(help_text="Encrypted Consumer Secret")
+    daraja_shortcode = models.CharField(max_length=50)
+    daraja_passkey = models.TextField(help_text="Encrypted Passkey")
+
+    def __str__(self):
+        return f"Platform Config ({self.daraja_shortcode})"
 
 class SiteSettings(models.Model):
-    delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=20)
+    delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=20, help_text="Legacy global fee")
+    
+    # New Dynamic Fee Settings
+    base_delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=100.0, help_text="Fee for base distance")
+    base_distance_km = models.DecimalField(max_digits=5, decimal_places=2, default=2.0, help_text="Distance covered by base fee")
+    extra_distance_surcharge = models.DecimalField(max_digits=10, decimal_places=2, default=30.0, help_text="Charge per extra KM")
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     

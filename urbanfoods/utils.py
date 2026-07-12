@@ -7,10 +7,34 @@ from math import radians, sin, cos, sqrt, atan2
 
 def haversine_distance_km(lat1, lng1, lat2, lng2):
     R = 6371
-    lat1, lng1, lat2, lng2 = map(radians, [lat1, lng1, lat2, lng2])
+    lat1, lng1, lat2, lng2 = map(radians, [float(lat1), float(lng1), float(lat2), float(lng2)])
     dlat, dlng = lat2 - lat1, lng2 - lng1
     a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlng/2)**2
     return R * 2 * atan2(sqrt(a), sqrt(1 - a))
+
+def calculate_delivery_fee(user_lat, user_lng, store_lat, store_lng, store=None):
+    """
+    Calculate delivery fee based on distance.
+    Priority: Store-specific overrides > SiteSettings global parameters.
+    """
+    from .models import SiteSettings
+    global_settings = SiteSettings.get_instance()
+    
+    # Use store overrides if available, otherwise fallback to global settings
+    base_fee = float(store.base_delivery_fee if store and store.base_delivery_fee is not None else global_settings.base_delivery_fee)
+    base_dist = float(store.base_distance_km if store and store.base_distance_km is not None else global_settings.base_distance_km)
+    surcharge = float(store.extra_distance_surcharge if store and store.extra_distance_surcharge is not None else global_settings.extra_distance_surcharge)
+
+    distance = haversine_distance_km(user_lat, user_lng, store_lat, store_lng)
+    
+    if distance <= base_dist:
+        return base_fee
+    
+    extra_km = distance - base_dist
+    fee = base_fee + (extra_km * surcharge)
+    
+    # Round to nearest 5 or 10 for "cleaner" pricing
+    return round(fee / 5) * 5
 
 def is_within_delivery_zone(store, lat, lng):
     distance = haversine_distance_km(float(store.latitude), float(store.longitude), lat, lng)
@@ -57,10 +81,12 @@ from firebase_admin import credentials, messaging
 try:
     if not firebase_admin._apps:
         # User needs to place serviceAccountKey.json in the project root
-        cred_path = os.path.join(settings.BASE_DIR, 'serviceAccountKey.json')
+        cred_path = os.path.join(settings.BASE_DIR, 'tipsytheoryy-dfe92-firebase-adminsdk-fbsvc-499b77e717.json')
         if os.path.exists(cred_path):
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred)
+        else:
+            logger.warning(f"Firebase credentials not found at {cred_path}")
 except Exception as e:
     logger.error(f"Firebase Admin initialization failed: {e}")
 
@@ -243,7 +269,13 @@ def notify_new_order(order):
 
         # FCM for customer
         if order.user:
-            send_fcm_notification(order.user, "Order Received!", f"Order #{order.order_number} placed.")
+            from .tasks import send_lifecycle_notification_task
+            send_lifecycle_notification_task.delay(
+                order.user.id, 
+                "Order Received!", 
+                f"Order #{order.order_number} placed.",
+                {'order_id': str(order.id), 'type': 'order_placed'}
+            )
 
         # Send to store specific chat if configured
         if order.store and order.store.telegram_chat_id:
@@ -271,7 +303,13 @@ Status: Ready for delivery 🚀
     """.strip()
 
     if order.user:
-        send_fcm_notification(order.user, "Payment Confirmed!", f"Payment for order #{order.order_number} received.")
+        from .tasks import send_lifecycle_notification_task
+        send_lifecycle_notification_task.delay(
+            order.user.id, 
+            "Payment Confirmed!", 
+            f"Payment for order #{order.order_number} received.",
+            {'order_id': str(order.id), 'type': 'payment_confirmed'}
+        )
 
     if order.store and order.store.telegram_chat_id:
         send_telegram_notification(order.store.telegram_chat_id, message)
@@ -293,7 +331,13 @@ Status: Completed ✅
     """.strip()
 
     if order.user:
-        send_fcm_notification(order.user, "Enjoy!", f"Order #{order.order_number} delivered.")
+        from .tasks import send_lifecycle_notification_task
+        send_lifecycle_notification_task.delay(
+            order.user.id, 
+            "Enjoy!", 
+            f"Order #{order.order_number} delivered.",
+            {'order_id': str(order.id), 'type': 'order_delivered'}
+        )
 
     if order.store and order.store.telegram_chat_id:
         send_telegram_notification(order.store.telegram_chat_id, message)
@@ -346,11 +390,12 @@ Please head to <b>{order.store.name}</b> to pick up.
     """.strip()
     
     # Send FCM
-    send_fcm_notification(
-        rider,
+    from .tasks import send_lifecycle_notification_task
+    send_lifecycle_notification_task.delay(
+        rider.id,
         "New Delivery Assigned!",
         f"New delivery from {order.store.name}.",
-        data={'order_id': str(order.id), 'type': 'new_assignment'}
+        {'order_id': str(order.id), 'type': 'new_assignment'}
     )
     
     if rider.telegram_chat_id:
@@ -432,4 +477,38 @@ def check_and_notify_low_stock():
         logger.info(f"✅ Sent {alert_count} low stock alerts")
     
     return alert_count > 0
+
+def calculate_risk_score(user, order_data):
+    """
+    Intelligently calculate a risk score (0-100) for a transaction.
+    Factors: Order Value, Location, Behavior Signals.
+    """
+    score = 0
+    
+    # 1. Order Value Signal
+    total = float(order_data.get('total', 0))
+    if total > 20000: # Very High Value (e.g., $150+)
+        score += 40
+    elif total > 5000: # High Value
+        score += 20
+        
+    # 2. Silent Sentry Signal (Interaction Speed)
+    meta = user.verification_metadata or {}
+    picker_ms = meta.get('picker_interaction_ms', 5000)
+    if picker_ms < 1500: # Suspiciously fast DOB entry
+        score += 30
+        
+    # 3. Location Intelligence (Near High-Risk Areas like Schools)
+    # Note: In production, you'd match coords against a DB of schools.
+    # For now, we flag specific high-risk area strings.
+    address = str(order_data.get('address_string', '')).lower()
+    high_risk_keywords = ['school', 'university', 'campus', 'college', 'hostel']
+    if any(keyword in address for keyword in high_risk_keywords):
+        score += 30
+        
+    # 4. Account Age
+    if (timezone.now() - user.date_joined).days < 1: # Brand new account
+        score += 15
+
+    return min(score, 100)
 

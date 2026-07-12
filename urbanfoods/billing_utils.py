@@ -1,12 +1,13 @@
 import requests
 import base64
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from django.conf import settings
 import os
 import logging
 from django.core.cache import cache
 from .models import PlatformConfig
+from .mpesa_utils import decrypt_value
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,11 @@ class SubscriptionBilling:
             raise ValueError("PlatformConfig not configured. Please set it up in Admin.")
         
         self.config = config
+        self.consumer_key = decrypt_value(config.daraja_consumer_key)
+        self.consumer_secret = decrypt_value(config.daraja_consumer_secret)
+        self.passkey = decrypt_value(config.daraja_passkey)
+        self.shortcode = config.daraja_shortcode
+
         self.is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
         self.base_url = (
             'https://api.safaricom.co.ke'
@@ -31,10 +37,14 @@ class SubscriptionBilling:
         if token:
             return token
 
+        if not self.consumer_key or not self.consumer_secret:
+            logger.error("Missing Platform M-Pesa credentials")
+            return None
+
         try:
             response = requests.get(
                 self.access_token_url,
-                auth=(self.config.daraja_consumer_key, self.config.daraja_consumer_secret),
+                auth=(self.consumer_key, self.consumer_secret),
                 timeout=15
             )
             response.raise_for_status()
@@ -52,7 +62,7 @@ class SubscriptionBilling:
             return {'success': False, 'message': 'Access token error'}
 
         timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-        data_to_encode = f"{self.config.daraja_shortcode}{self.config.daraja_passkey}{timestamp}"
+        data_to_encode = f"{self.shortcode}{self.passkey}{timestamp}"
         password = base64.b64encode(data_to_encode.encode()).decode()
 
         # Format phone: ensure it starts with 254
@@ -63,13 +73,13 @@ class SubscriptionBilling:
             phone = '254' + phone
 
         payload = {
-            "BusinessShortCode": self.config.daraja_shortcode,
+            "BusinessShortCode": self.shortcode,
             "Password": password,
             "Timestamp": timestamp,
             "TransactionType": "CustomerPayBillOnline",
             "Amount": int(store.plan_price),
             "PartyA": phone,
-            "PartyB": self.config.daraja_shortcode,
+            "PartyB": self.shortcode,
             "PhoneNumber": phone,
             "CallBackURL": f"{settings.SITE_URL}/api/v1/billing/callback/",
             "AccountReference": f"SUB-{store.id}",

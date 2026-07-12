@@ -1,9 +1,12 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from django.utils import timezone
-from django.db.models import Q
-from .models import Order, RiderLocationPing, RiderEarning, User
+from django.db.models import Q, F
+from django.core.cache import cache
+import json
+from .models import Order, RiderEarning, User
 from .api_v1_serializers import OrderSerializer, RiderEarningSerializer, RiderProfileSerializer
 from .permissions import IsRider
 from .utils import send_telegram_notification
@@ -37,8 +40,20 @@ class RiderOrderStatusView(APIView):
         elif new_status == 'arrived':
             order.arrived_at = timezone.now()
         elif new_status == 'delivered':
+            # 🛡️ Guard: Ensure verification is done if required
+            if order.requires_rider_verification and not order.rider_verified_at:
+                verification_method = request.data.get('verification_method')
+                if not verification_method:
+                    return Response({
+                        'error': 'verification_required',
+                        'message': 'Recipent ID verification is required for this order.'
+                    }, status=status.HTTP_403_FORBIDDEN)
+                
+                order.rider_verified_at = timezone.now()
+                order.rider_verification_method = verification_method
+
             order.delivered_at = timezone.now()
-            # Create earning record
+            # 1. Create earning record
             RiderEarning.objects.get_or_create(
                 order=order,
                 defaults={
@@ -48,9 +63,32 @@ class RiderOrderStatusView(APIView):
                     'total': order.rider_base_fare + order.tip_amount
                 }
             )
+            # 2. Write-back buffered location pings from cache to DB
+            from .models import RiderLocationPing
+            path_key = f"order_path_{order.id}"
+            buffered_path = cache.get(path_key, [])
+            if buffered_path:
+                pings_to_create = [
+                    RiderLocationPing(
+                        rider=request.user,
+                        order=order,
+                        latitude=point['lat'],
+                        longitude=point['lng'],
+                        created_at=point['timestamp']
+                    ) for point in buffered_path
+                ]
+                RiderLocationPing.objects.bulk_create(pings_to_create)
+                cache.delete(path_key) # Clean up cache
             # Update rider stats
             request.user.total_deliveries += 1
             request.user.save(update_fields=['total_deliveries'])
+            
+            # 3. Update customer loyalty points (1 point per 100 KSh spent)
+            if order.user:
+                points_earned = int(order.total / 100)
+                if points_earned > 0:
+                    order.user.loyalty_points = F('loyalty_points') + points_earned
+                    order.user.save(update_fields=['loyalty_points'])
             
             # Notify store
             if order.store and order.store.telegram_chat_id:
@@ -62,21 +100,36 @@ class RiderOrderStatusView(APIView):
         order.save()
         return Response({'status': 'updated', 'new_status': order.status})
 
+from django.core.cache import cache
+import json
+
 class RiderLocationPingView(APIView):
     permission_classes = [IsRider]
     
     def post(self, request):
         order_id = request.data.get('order_id')
-        try:
-            RiderLocationPing.objects.create(
-                rider=request.user,
-                order_id=order_id,
-                latitude=request.data['latitude'],
-                longitude=request.data['longitude']
-            )
-            return Response({'status': 'ok'})
-        except KeyError as e:
-            return Response({'error': f'Missing field: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+        lat = request.data.get('latitude')
+        lng = request.data.get('longitude')
+
+        if not lat or not lng:
+            return Response({'error': 'Missing coordinates'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Update latest rider position in cache for real-time retrieval
+        rider_pos_key = f"rider_pos_{request.user.id}"
+        cache.set(rider_pos_key, {'lat': lat, 'lng': lng}, timeout=300) # 5 mins TTL
+
+        # 2. If this ping is for a specific order, buffer it for the trip path
+        if order_id:
+            path_key = f"order_path_{order_id}"
+            current_path = cache.get(path_key, [])
+            current_path.append({
+                'lat': lat,
+                'lng': lng,
+                'timestamp': timezone.now().isoformat()
+            })
+            cache.set(path_key, current_path, timeout=3600*4) # 4 hours TTL
+
+        return Response({'status': 'ok'})
 
 class RiderEarningsView(APIView):
     permission_classes = [IsRider]
@@ -102,6 +155,7 @@ class RiderEarningsSummaryView(APIView):
 
 class RiderProfileView(APIView):
     permission_classes = [IsRider]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
     
     def get(self, request):
         serializer = RiderProfileSerializer(request.user)
@@ -129,6 +183,19 @@ class RiderOrderQueueView(APIView):
             Q(assigned_rider__isnull=True, status='pending') | 
             Q(assigned_rider=request.user, status__in=['assigned', 'picked_up', 'arrived'])
         ).order_by('-created_at')
+        
+        serializer = OrderSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+class RiderHistoryView(APIView):
+    permission_classes = [IsRider]
+    
+    def get(self, request):
+        # Get all delivered orders for this rider
+        queryset = Order.objects.filter(
+            assigned_rider=request.user, 
+            status='delivered'
+        ).order_by('-delivered_at')
         
         serializer = OrderSerializer(queryset, many=True)
         return Response(serializer.data)

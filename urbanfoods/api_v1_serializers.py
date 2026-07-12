@@ -3,14 +3,17 @@ from django.utils import timezone
 import datetime
 from .models import User, Store, Order, OrderItem, FoodItem, Rating, RiderEarning, FoodCategory, Promotion, SubscriptionPayment, SavedAddress, RiderLocationPing
 
+from django.core.cache import cache
+
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
             'id', 'username', 'email', 'phone', 'first_name', 'last_name', 
-            'role', 'loyalty_points', 'wallet_balance', 'profile_picture'
+            'role', 'loyalty_points', 'wallet_balance', 'profile_picture',
+            'is_age_verified', 'risk_score'
         ]
-        read_only_fields = ['loyalty_points', 'wallet_balance', 'role']
+        read_only_fields = ['loyalty_points', 'wallet_balance', 'role', 'is_age_verified', 'risk_score']
 
 class RiderProfileSerializer(serializers.ModelSerializer):
     class Meta:
@@ -25,6 +28,7 @@ class RiderProfileSerializer(serializers.ModelSerializer):
 
 class StoreSerializer(serializers.ModelSerializer):
     distance = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True, required=False)
+    dynamic_delivery_fee = serializers.SerializerMethodField()
     is_favourite = serializers.SerializerMethodField()
     is_open = serializers.SerializerMethodField()
     
@@ -39,17 +43,34 @@ class StoreSerializer(serializers.ModelSerializer):
     class Meta:
         model = Store
         fields = [
-            'id', 'name', 'shop_name', 'logo', 'tagline', 'primary_color',
-            'rating', 'rating_count', 'delivery_fee', 'avg_delivery_minutes',
-            'latitude', 'longitude', 'is_pro', 'is_favourite', 'distance',
-            'bank_name', 'bank_account_name', 'bank_account_number',
+            'id', 'name', 'shop_name', 'logo', 'cover_image', 'tagline', 'primary_color',
+            'rating', 'rating_count', 'delivery_fee', 'dynamic_delivery_fee',
+            'base_delivery_fee', 'base_distance_km', 'extra_distance_surcharge',
+            'avg_delivery_minutes', 'latitude', 'longitude', 'is_pro', 'is_favourite', 
+            'distance', 'bank_name', 'bank_account_name', 'bank_account_number',
             'phone', 'email', 'address_string',
             'opening_time', 'closing_time', 'is_open', 'plan', 'plan_price',
             'subscription_expires', 'billing_status',
-            'payhero_username', 'payhero_api_key', 'payhero_account_number',
-            'payment_provider', 'flutterwave_enabled', 'flutterwave_currency'
+            'mpesa_shortcode', 'mpesa_consumer_key', 'mpesa_consumer_secret',
+            'mpesa_passkey', 'mpesa_callback_url'
         ]
         read_only_fields = ['owner', 'rating', 'rating_count']
+
+    def get_dynamic_delivery_fee(self, obj):
+        request = self.context.get('request')
+        if not request:
+            return float(obj.delivery_fee)
+            
+        lat = request.query_params.get('lat')
+        lng = request.query_params.get('lng')
+        
+        if lat and lng and obj.latitude and obj.longitude:
+            from .utils import calculate_delivery_fee
+            try:
+                return calculate_delivery_fee(float(lat), float(lng), float(obj.latitude), float(obj.longitude), store=obj)
+            except Exception:
+                return float(obj.delivery_fee)
+        return float(obj.delivery_fee)
 
     def get_is_open(self, obj):
         now = timezone.localtime().time()
@@ -118,6 +139,12 @@ class OrderSerializer(serializers.ModelSerializer):
 
     def get_rider_latitude(self, obj):
         if obj.assigned_rider:
+            # First check cache for live position
+            cached_pos = cache.get(f"rider_pos_{obj.assigned_rider.id}")
+            if cached_pos:
+                return cached_pos['lat']
+            
+            # Fallback to last known DB record if not in cache
             last_ping = RiderLocationPing.objects.filter(rider=obj.assigned_rider).order_by('-created_at').first()
             if last_ping:
                 return last_ping.latitude
@@ -125,6 +152,12 @@ class OrderSerializer(serializers.ModelSerializer):
 
     def get_rider_longitude(self, obj):
         if obj.assigned_rider:
+            # First check cache for live position
+            cached_pos = cache.get(f"rider_pos_{obj.assigned_rider.id}")
+            if cached_pos:
+                return cached_pos['lng']
+
+            # Fallback to last known DB record if not in cache
             last_ping = RiderLocationPing.objects.filter(rider=obj.assigned_rider).order_by('-created_at').first()
             if last_ping:
                 return last_ping.longitude
@@ -142,7 +175,8 @@ class OrderSerializer(serializers.ModelSerializer):
             'payment_status', 'payment_method', 'total', 'latitude', 'longitude', 'address_string',
             'google_maps_link', 'created_at', 'items', 'delivery_fee', 'tip_amount',
             'store_name', 'store_latitude', 'store_longitude',
-            'rider_latitude', 'rider_longitude'
+            'rider_latitude', 'rider_longitude',
+            'requires_rider_verification', 'rider_verified_at'
         ]
         read_only_fields = ['order_number', 'created_at']
 
@@ -157,6 +191,7 @@ class SubscriptionPaymentSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class RiderEarningSerializer(serializers.ModelSerializer):
+    order_number = serializers.ReadOnlyField(source='order.order_number')
     class Meta:
         model = RiderEarning
         fields = '__all__'

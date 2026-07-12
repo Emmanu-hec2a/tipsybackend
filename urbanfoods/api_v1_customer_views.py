@@ -1,15 +1,19 @@
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+import os
 from django.shortcuts import get_object_or_404
 from django.db.models import Q, F, ExpressionWrapper, DecimalField, Avg
 from django.db.models.functions import Sqrt, Power
 from .models import Store, FoodItem, Order, Rating, SavedAddress, OrderItem, OrderStatusHistory, FoodCategory
 from .api_v1_serializers import StoreSerializer, FoodItemSerializer, OrderSerializer, UserSerializer, SavedAddressSerializer, FoodCategorySerializer
 from .permissions import IsCustomer
-from django.utils import timezone
+from .mpesa_utils import MpesaIntegration
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
 from django.db import transaction
+from .utils import calculate_risk_score
 
 class SavedAddressViewSet(generics.ListCreateAPIView):
     serializer_class = SavedAddressSerializer
@@ -30,7 +34,7 @@ class SavedAddressDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 class CustomerProfileView(APIView):
     permission_classes = [IsCustomer]
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
         serializer = UserSerializer(request.user)
@@ -43,6 +47,7 @@ class CustomerProfileView(APIView):
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+@method_decorator(cache_page(60*5), name='dispatch')
 class CustomerStoreListView(generics.ListAPIView):
     serializer_class = StoreSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -82,6 +87,7 @@ class CustomerStoreDetailView(generics.RetrieveAPIView):
     serializer_class = StoreSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+@method_decorator(cache_page(60*5), name='dispatch')
 class CustomerCategoryListView(generics.ListAPIView):
     queryset = FoodCategory.objects.all().order_by('order', 'name')
     serializer_class = FoodCategorySerializer
@@ -218,6 +224,22 @@ class CustomerPlaceOrderView(APIView):
     permission_classes = [IsCustomer]
 
     def post(self, request):
+        # 🛡️ Age Verification Guard
+        user = request.user
+        if not user.is_age_verified:
+            # Check if this specific order requires immediate verification
+            # (High value or High risk profile)
+            risk = calculate_risk_score(user, request.data)
+            user.risk_score = risk
+            user.save(update_fields=['risk_score'])
+            
+            if risk >= 70: # High threshold for immediate block/escalation
+                return Response({
+                    'error': 'age_verification_required',
+                    'message': 'Quick check to continue! Please verify your age to complete this order.',
+                    'risk_score': risk
+                }, status=status.HTTP_403_FORBIDDEN)
+
         data = request.data
         items_data = data.get('items', [])
         if not items_data:
@@ -233,11 +255,18 @@ class CustomerPlaceOrderView(APIView):
                 if not store:
                     return Response({'error': 'Store not found for items'}, status=status.HTTP_400_BAD_REQUEST)
 
-                # Calculate totals
+                # Calculate totals and validate single store
                 subtotal = 0
                 order_items_to_create = []
                 for item in items_data:
                     food_item = get_object_or_404(FoodItem, id=item.get('product_id'))
+                    
+                    if food_item.store != store:
+                        return Response(
+                            {'error': f'Cart contains items from multiple stores ({store.name} and {food_item.store.name}).'}, 
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
                     quantity = item.get('quantity', 1)
                     subtotal += food_item.price * quantity
                     order_items_to_create.append(OrderItem(
@@ -250,6 +279,14 @@ class CustomerPlaceOrderView(APIView):
                 delivery_fee = store.delivery_fee
                 total = subtotal + delivery_fee
 
+                # Logic: If risk was high but not high enough for an immediate block (403),
+                # we flag it for Rider Verification at the door.
+                risk = calculate_risk_score(request.user, data)
+                requires_verification = risk >= 40 # Medium risk flags the rider check
+
+                # Initial status is 'payment_pending' if M-Pesa is used, otherwise 'pending' for Cash
+                initial_status = 'payment_pending' if data.get('payment_method') == 'mpesa' else 'pending'
+
                 order = Order.objects.create(
                     user=request.user,
                     store=store,
@@ -259,9 +296,10 @@ class CustomerPlaceOrderView(APIView):
                     latitude=data.get('latitude'),
                     longitude=data.get('longitude'),
                     address_string=data.get('address_string'),
-                    status='pending',
+                    status=initial_status,
                     payment_status='pending',
-                    payment_method=data.get('payment_method', 'mpesa')
+                    payment_method=data.get('payment_method', 'mpesa'),
+                    requires_rider_verification=requires_verification
                 )
 
                 for item in order_items_to_create:
@@ -270,11 +308,40 @@ class CustomerPlaceOrderView(APIView):
 
                 OrderStatusHistory.objects.create(
                     order=order,
-                    status='pending',
+                    status=initial_status,
                     notes='Order placed from mobile app.'
                 )
 
-                return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
+                response_data = OrderSerializer(order).data
+
+                # Trigger M-Pesa STK Push if method is mpesa
+                if order.payment_method == 'mpesa':
+                    try:
+                        mpesa = MpesaIntegration(store=order.store)
+                        phone = mpesa.format_phone_number(request.user.phone)
+                        
+                        # Use a small amount for testing if not production
+                        is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
+                        amount = int(order.total) if is_production else 1
+                        
+                        stk_result = mpesa.initiate_stk_push(
+                            phone_number=phone,
+                            amount=amount,
+                            account_reference=f"ORD-{order.order_number}",
+                            transaction_desc=f"Payment for Order {order.order_number}"
+                        )
+                        
+                        if stk_result.get('success'):
+                            order.checkout_request_id = stk_result.get('checkout_request_id')
+                            order.save()
+                            response_data['checkout_request_id'] = stk_result.get('checkout_request_id')
+                            response_data['message'] = "M-Pesa STK push initiated successfully."
+                        else:
+                            response_data['mpesa_error'] = stk_result.get('message')
+                    except Exception as mpesa_err:
+                        response_data['mpesa_error'] = str(mpesa_err)
+
+                return Response(response_data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

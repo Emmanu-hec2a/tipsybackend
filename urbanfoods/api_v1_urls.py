@@ -30,8 +30,6 @@ partner_patterns = [
     path('settings/', api_v1_partner_views.StoreSettingsView.as_view(), name='partner_settings'),
     path('billing/pay-now/', api_v1_billing_views.PayNowView.as_view(), name='partner_billing_pay_now'),
     path('billing/history/', api_v1_billing_views.SubscriptionHistoryView.as_view(), name='partner_billing_history'),
-    path('payments/callback/', views.payhero_callback, name='payhero_callback'),
-    path('payments/flutterwave/initiate/', api_v1_billing_views.initiate_flutterwave_payment, name='initiate_flutterwave_payment'),
 ]
 
 customer_patterns = [
@@ -64,6 +62,7 @@ auth_patterns = [
 
 rider_patterns = [
     path('orders/queue/', api_v1_rider_views.RiderOrderQueueView.as_view(), name='rider_order_queue'),
+    path('orders/history/', api_v1_rider_views.RiderHistoryView.as_view(), name='rider_order_history'),
     path('orders/<int:order_id>/accept/', api_v1_rider_views.RiderAcceptOrderView.as_view(), name='rider_order_accept'),
     path('orders/<int:order_id>/status/', api_v1_rider_views.RiderOrderStatusView.as_view(), name='rider_order_status'),
     path('location/ping/', api_v1_rider_views.RiderLocationPingView.as_view(), name='rider_location_ping'),
@@ -83,6 +82,7 @@ superadmin_patterns = [
 ]
 
 urlpatterns = [
+    path('fcm-token/', views.SaveFCMTokenView.as_view(), name='save_fcm_token_root'),
     path('customer/profile/', api_v1_customer_views.CustomerProfileView.as_view(), name='customer_profile_api_alt'),
     path('partner/', include(partner_patterns)),
     path('rider/', include(rider_patterns)),
@@ -91,6 +91,5 @@ urlpatterns = [
     path('superadmin/', include(superadmin_patterns)),
     path('auth/', include(auth_patterns)),
     path('billing/callback/', api_v1_billing_views.subscription_callback, name='subscription_callback'),
-    path('payments/flutterwave/webhook/', api_v1_billing_views.flutterwave_webhook, name='flutterwave_webhook'),
     path('geocode/reverse/', views.reverse_geocode, name='api_reverse_geocode'),
 ]

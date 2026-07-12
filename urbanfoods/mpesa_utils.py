@@ -1,15 +1,46 @@
 import requests
 import base64
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from django.conf import settings
 import os
 import logging
 from django.core.cache import cache
-
+from cryptography.fernet import Fernet
 import json
 from django.utils import timezone
 
+logger = logging.getLogger(__name__)
+
+# =========================
+# ENCRYPTION UTILS
+# =========================
+def get_encryption_key():
+    """Get encryption key from settings/env. Generates one if missing (NOT FOR PRODUCTION)."""
+    key = getattr(settings, 'ENCRYPTION_KEY', os.environ.get('ENCRYPTION_KEY'))
+    if not key:
+        logger.warning("ENCRYPTION_KEY not found in settings or env. This is insecure for production.")
+        # Fallback for development/testing ONLY. 
+        return b'6csUuoMhN7dvrad3XaJ5ApYcFPV2AEFtlwSUEAzoREU='
+    return key.encode() if isinstance(key, str) else key
+
+def encrypt_value(value):
+    if not value: return None
+    f = Fernet(get_encryption_key())
+    return f.encrypt(value.encode()).decode()
+
+def decrypt_value(encrypted_value):
+    if not encrypted_value: return None
+    try:
+        f = Fernet(get_encryption_key())
+        return f.decrypt(encrypted_value.encode()).decode()
+    except Exception:
+        logger.error("Failed to decrypt M-Pesa credential. Check ENCRYPTION_KEY.")
+        return None
+
+# =========================
+# EVENT LOGGING
+# =========================
 def log_mpesa_event(event_type, user_id=None, order_number=None, phone=None, amount=None, extra=None):
     log_data = {
         "event_type": event_type,
@@ -24,22 +55,28 @@ def log_mpesa_event(event_type, user_id=None, order_number=None, phone=None, amo
     logger.info(json.dumps(log_data))
 
 
-logger = logging.getLogger(__name__)
-
-
 class MpesaIntegration:
+    """
+    Handles M-Pesa Daraja STK Push using store-specific credentials.
+    """
 
-    def __init__(self):
-
-        self.consumer_key = os.environ.get('MPESA_CONSUMER_KEY')
-        self.consumer_secret = os.environ.get('MPESA_CONSUMER_SECRET')
-        self.passkey = os.environ.get('MPESA_PASSKEY')
-
-        self.paybill_number = os.environ.get('MPESA_PAYBILL_NUMBER')
-        self.till_number = os.environ.get('MPESA_TILL_NUMBER')
+    def __init__(self, store=None):
+        self.store = store
+        if store:
+            self.consumer_key = decrypt_value(store.mpesa_consumer_key)
+            self.consumer_secret = decrypt_value(store.mpesa_consumer_secret)
+            self.passkey = decrypt_value(store.mpesa_passkey)
+            self.shortcode = store.mpesa_shortcode
+            self.callback_url = store.mpesa_callback_url or os.environ.get('MPESA_CALLBACK_URL')
+        else:
+            # Fallback to env variables (legacy/default)
+            self.consumer_key = os.environ.get('MPESA_CONSUMER_KEY')
+            self.consumer_secret = os.environ.get('MPESA_CONSUMER_SECRET')
+            self.passkey = os.environ.get('MPESA_PASSKEY')
+            self.shortcode = os.environ.get('MPESA_PAYBILL_NUMBER')
+            self.callback_url = os.environ.get('MPESA_CALLBACK_URL')
 
         is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
-
         self.base_url = (
             'https://api.safaricom.co.ke'
             if is_production
@@ -50,13 +87,16 @@ class MpesaIntegration:
         self.stk_push_url = f'{self.base_url}/mpesa/stkpush/v1/processrequest'
         self.stk_query_url = f'{self.base_url}/mpesa/stkpushquery/v1/query'
 
-    # =========================
-    # ACCESS TOKEN
-    # =========================
     def get_access_token(self):
-        token = cache.get('mpesa_access_token')
+        # Cache per-store if needed, but for now global cache with store prefix is safer
+        cache_key = f'mpesa_token_{self.shortcode}' if self.shortcode else 'mpesa_access_token'
+        token = cache.get(cache_key)
         if token:
             return token
+
+        if not self.consumer_key or not self.consumer_secret:
+            logger.error(f"Missing M-Pesa credentials for store: {self.store}")
+            return None
 
         try:
             response = requests.get(
@@ -68,55 +108,39 @@ class MpesaIntegration:
             data = response.json()
 
             token = data['access_token']
-            cache.set('mpesa_access_token', token, timeout=3500)
-
+            cache.set(cache_key, token, timeout=3500)
             return token
-
         except Exception:
             logger.exception("Failed to obtain MPESA access token")
             return None
 
-    # =========================
-    # PASSWORD GENERATION
-    # =========================
-    def generate_password(self, shortcode, timestamp):
-        data_to_encode = f"{shortcode}{self.passkey}{timestamp}"
+    def generate_password(self, timestamp):
+        data_to_encode = f"{self.shortcode}{self.passkey}{timestamp}"
         return base64.b64encode(data_to_encode.encode()).decode()
 
-    # =========================
-    # STK PUSH
-    # =========================
-    def initiate_stk_push(self, phone_number, amount, account_reference,
-                      transaction_desc, store_type='liquor'):
-
+    def initiate_stk_push(self, phone_number, amount, account_reference, transaction_desc):
         access_token = self.get_access_token()
         if not access_token:
-            return {'success': False, 'message': 'Access token error'}
+            return {'success': False, 'message': 'Authentication failed'}
 
         timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        password = self.generate_password(timestamp)
 
-        if store_type == 'liquor':
-            shortcode = self.paybill_number
-            transaction_type = "CustomerPayBillOnline"
-            account_ref = account_reference
-        else:
-            shortcode = self.till_number
-            transaction_type = "CustomerBuyGoodsOnline"
-            account_ref = account_reference[:12]
-
-        password = self.generate_password(shortcode, timestamp)
-
+        # Determine if it's Paybill or Till
+        # Simple heuristic: if shortcode is 5-6 digits, likely Paybill. If 7 digits, likely Till.
+        # But Daraja API expects BusinessShortCode and PartyB to be the same for STK.
+        
         payload = {
-            "BusinessShortCode": shortcode,
+            "BusinessShortCode": self.shortcode,
             "Password": password,
             "Timestamp": timestamp,
-            "TransactionType": transaction_type,
+            "TransactionType": "CustomerPayBillOnline", # Works for both Paybill and Till in many cases
             "Amount": int(Decimal(str(amount))),
             "PartyA": phone_number,
-            "PartyB": shortcode,
+            "PartyB": self.shortcode,
             "PhoneNumber": phone_number,
-            "CallBackURL": os.environ.get('MPESA_CALLBACK_URL'),
-            "AccountReference": account_ref,
+            "CallBackURL": self.callback_url,
+            "AccountReference": account_reference[:12],
             "TransactionDesc": transaction_desc[:13]
         }
 
@@ -130,9 +154,8 @@ class MpesaIntegration:
                 self.stk_push_url,
                 json=payload,
                 headers=headers,
-                timeout=20  # ← 20 seconds is enough
+                timeout=20
             )
-
             response.raise_for_status()
             result = response.json()
 
@@ -142,35 +165,24 @@ class MpesaIntegration:
                     "checkout_request_id": result.get("CheckoutRequestID"),
                     "customer_message": result.get("CustomerMessage")
                 }
-
             return {
                 "success": False,
                 "message": result.get("ResponseDescription", "STK push failed")
             }
-
-        except requests.exceptions.ReadTimeout:
-            logger.warning("STK push timeout - waiting for callback")
-            return {
-                "success": True,
-                "pending": True,
-                "message": "Payment request sent. Check your phone."
-            }
-        except requests.exceptions.RequestException:
-            logger.exception("STK Push network error")
-            return {"success": False, "message": "Network error"}
-
+        except Exception as e:
+            logger.exception("STK Push error")
+            return {"success": False, "message": str(e)}
 
     def query_stk_status(self, checkout_request_id):
         access_token = self.get_access_token()
         if not access_token:
-            return {'success': False, 'message': 'Access token error'}
+            return {'success': False, 'message': 'Authentication failed'}
 
         timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-        shortcode = self.paybill_number
-        password = self.generate_password(shortcode, timestamp)
+        password = self.generate_password(timestamp)
 
         payload = {
-            "BusinessShortCode": shortcode,
+            "BusinessShortCode": self.shortcode,
             "Password": password,
             "Timestamp": timestamp,
             "CheckoutRequestID": checkout_request_id
@@ -186,37 +198,22 @@ class MpesaIntegration:
                 self.stk_query_url,
                 json=payload,
                 headers=headers,
-                timeout=20  # ← 20 seconds
+                timeout=20
             )
-
             response.raise_for_status()
             result = response.json()
-
             return {
                 "success": True,
                 "response_code": result.get("ResponseCode"),
                 "result_code": result.get("ResultCode"),
                 "result_desc": result.get("ResultDesc")
             }
-
-        except requests.exceptions.ReadTimeout:
-            logger.warning("STK query timeout for %s - payment may still be processing", checkout_request_id)
-            return {
-                "success": True,
-                "pending": True,
-                "message": "Query timeout - payment still processing"
-            }
-        except requests.exceptions.RequestException:
+        except Exception:
             logger.exception("STK Query error")
-            return {"success": False, "message": "Query network error"}
+            return {"success": False, "message": "Network error"}
 
-    # =========================
-    # PHONE FORMATTER
-    # =========================
     def format_phone_number(self, phone_number):
-
         phone = ''.join(filter(str.isdigit, str(phone_number)))
-
         if phone.startswith('0') and len(phone) == 10:
             return '254' + phone[1:]
         elif phone.startswith('254') and len(phone) == 12:
@@ -225,5 +222,3 @@ class MpesaIntegration:
             return '254' + phone
         else:
             raise ValueError("Invalid phone number format")
-        
-mpesa = MpesaIntegration()

@@ -42,6 +42,8 @@ class CustomerSignupView(APIView):
             phone = str(data.get('phone', ''))
             username = data.get('username', email)
             full_name = data.get('full_name', '')
+            dob = data.get('dob')
+            meta = data.get('verification_metadata', {})
             
             if not email or not password:
                 return Response({'error': 'Email and Password are required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -68,7 +70,9 @@ class CustomerSignupView(APIView):
                 phone=phone,
                 first_name=first_name,
                 last_name=last_name,
-                is_verified=True
+                is_verified=True,
+                date_of_birth=dob,
+                verification_metadata=meta
             )
             return Response(get_tokens(user), status=status.HTTP_201_CREATED)
         except IntegrityError:
@@ -86,6 +90,8 @@ class RiderSignupView(APIView):
             phone = str(data.get('phone', ''))
             username = data.get('username', email)
             full_name = data.get('full_name', '')
+            dob = data.get('dob')
+            meta = data.get('verification_metadata', {})
             
             if not email or not password:
                 return Response({'error': 'Email and Password are required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -112,7 +118,9 @@ class RiderSignupView(APIView):
                 phone=phone,
                 first_name=first_name,
                 last_name=last_name,
-                is_approved=True 
+                is_approved=True,
+                date_of_birth=dob,
+                verification_metadata=meta
             )
             return Response(get_tokens(user), status=status.HTTP_201_CREATED)
         except IntegrityError:

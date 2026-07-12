@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from unfold.admin import ModelAdmin
+from .mpesa_utils import encrypt_value, decrypt_value
+from django.forms import PasswordInput, CharField
 from .models import *
 
 @admin.register(User)
@@ -116,6 +118,24 @@ class StoreAdmin(ModelAdmin):
     search_fields = ('name', 'subdomain', 'owner__username')
     prepopulated_fields = {'subdomain': ('name',)}
 
+    fieldsets = (
+        (None, {'fields': ('owner', 'name', 'subdomain', 'is_active', 'is_pro')}),
+        ('Operations', {'fields': ('opening_time', 'closing_time', 'latitude', 'longitude', 'delivery_fee', 'delivery_radius_km')}),
+        ('Branding', {'fields': ('shop_name', 'logo', 'cover_image', 'primary_color', 'secondary_color', 'tagline', 'custom_domain')}),
+        ('M-Pesa Daraja Credentials', {
+            'fields': ('mpesa_shortcode', 'mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_passkey', 'mpesa_callback_url'),
+            'description': 'Sensitive credentials will be encrypted automatically on save.'
+        }),
+        ('Billing', {'fields': ('plan', 'plan_price', 'subscription_active', 'subscription_expires', 'billing_status', 'last_payment_date')}),
+    )
+
+    def save_model(self, request, obj, form, change):
+        for field in ['mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_passkey']:
+            val = getattr(obj, field)
+            if val and not val.startswith('gAAAA'):
+                setattr(obj, field, encrypt_value(val))
+        super().save_model(request, obj, form, change)
+
 @admin.register(Rating)
 class RatingAdmin(ModelAdmin):
     list_display = ('order', 'customer', 'store', 'store_rating', 'rider_rating', 'created_at')
@@ -143,6 +163,13 @@ class SubscriptionPaymentAdmin(ModelAdmin):
 @admin.register(PlatformConfig)
 class PlatformConfigAdmin(ModelAdmin):
     list_display = ('daraja_shortcode',)
+
+    def save_model(self, request, obj, form, change):
+        for field in ['daraja_consumer_key', 'daraja_consumer_secret', 'daraja_passkey']:
+            val = getattr(obj, field)
+            if val and not val.startswith('gAAAA'):
+                setattr(obj, field, encrypt_value(val))
+        super().save_model(request, obj, form, change)
 
 @admin.register(DeliveryGuy)
 class DeliveryGuyAdmin(ModelAdmin):

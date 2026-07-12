@@ -3,8 +3,10 @@
 import os
 from pathlib import Path
 import dj_database_url
+from dotenv import load_dotenv
 
-
+# Load environment variables from .env file
+load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -208,7 +210,22 @@ REST_FRAMEWORK = {
     'DEFAULT_VERSIONING_CLASS': 'rest_framework.versioning.URLPathVersioning',
     'ALLOWED_VERSIONS': ['v1'],
     'DEFAULT_VERSION': 'v1',
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.ScopedRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'merchant_blast': '3/minute',
+    },
 }
+
+# Celery Configuration
+REDIS_URL = os.environ.get('REDIS_URL')
+CELERY_BROKER_URL = REDIS_URL if REDIS_URL else 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = REDIS_URL if REDIS_URL else 'redis://localhost:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(days=7),
@@ -223,17 +240,20 @@ SIMPLE_JWT = {
 }
 
 # Caching (Redis recommended for production)
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'unique-snowflake',
+if os.environ.get('REDIS_URL'):
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': os.environ.get('REDIS_URL'),
+        }
     }
-    # For production with Redis:
-    # 'default': {
-    #     'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-    #     'LOCATION': 'redis://127.0.0.1:6379/1',
-    # }
-}
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'unique-snowflake',
+        }
+    }
 
 # Security Settings (Production)
 if not DEBUG:
@@ -284,12 +304,6 @@ MPESA_PAYBILL_NUMBER = os.environ.get('MPESA_PAYBILL_NUMBER')
 MPESA_TILL_NUMBER = os.environ.get('MPESA_TILL_NUMBER')
 ACCOUNT_NUMBER = os.environ.get('ACCOUNT_NUMBER')
 MPESA_CALLBACK_URL = os.environ.get('MPESA_CALLBACK_URL')
-MPESA_PRODUCTION = os.environ.get('MPESA_PRODUCTION')  # 'True' for production, 'sandbox' for testing
-
-PAYHERO_AUTH_TOKEN = 'Basic S2FYeVdZcTZ2RHZKRkhORGhRZGU6ZTRoWEl6bnJWMEZUS2U4WlB0UTZFZGFLbjE4cWRaSzRpdndLVFBUbg=='
-PAYHERO_API_PASSWORD = 'e4hXIznrV0FTKe8ZPtQ6EdaKn18qdZK4ivwKTPTn'
-PAYHERO_API_USERNAME = 'KaXyWYq6vDvJFHNDhQde'
-
-FLUTTERWAVE_PUBLIC_KEY = os.environ.get('FLUTTERWAVE_PUBLIC_KEY', '')
-FLUTTERWAVE_SECRET_KEY = os.environ.get('FLUTTERWAVE_SECRET_KEY', '')
-FLUTTERWAVE_WEBHOOK_SECRET = os.environ.get('FLUTTERWAVE_WEBHOOK_SECRET', '')
+# Payment Credentials (Managed via PlatformConfig and Store models)
+MPESA_PRODUCTION = os.environ.get('MPESA_PRODUCTION', 'False')
+ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY')

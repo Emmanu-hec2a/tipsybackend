@@ -1215,12 +1215,12 @@ def admin_analytics(request):
     )
 
     # M-PESA revenue and success rate
-    mpesa_revenue = mpesa_orders.filter(payment_status='completed').aggregate(total=Sum('total'))['total'] or 0
-    mpesa_success_rate = (mpesa_orders.filter(payment_status='completed').count() / mpesa_orders.count() * 100) if mpesa_orders.count() > 0 else 0
-    mpesa_avg_transaction = mpesa_revenue / mpesa_orders.filter(payment_status='completed').count() if mpesa_orders.filter(payment_status='completed').count() > 0 else 0
+    mpesa_revenue = mpesa_orders.filter(payment_status='paid').aggregate(total=Sum('total'))['total'] or 0
+    mpesa_success_rate = (mpesa_orders.filter(payment_status='paid').count() / mpesa_orders.count() * 100) if mpesa_orders.count() > 0 else 0
+    mpesa_avg_transaction = mpesa_revenue / mpesa_orders.filter(payment_status='paid').count() if mpesa_orders.filter(payment_status='paid').count() > 0 else 0
 
     # M-PESA payment timeline
-    mpesa_payment_timeline = mpesa_orders.filter(payment_status='completed').annotate(day=TruncDate('payment_completed_at')).values('day').annotate(
+    mpesa_payment_timeline = mpesa_orders.filter(payment_status='paid').annotate(day=TruncDate('payment_completed_at')).values('day').annotate(
         successful_payments=Count('id'),
         revenue=Sum('total')
     ).order_by('day')
@@ -1231,7 +1231,7 @@ def admin_analytics(request):
     ).order_by('-count')[:5]
 
     # Peak payment hours
-    peak_payment_hours = mpesa_orders.filter(payment_status='completed').annotate(hour=ExtractHour('payment_completed_at')).values('hour').annotate(
+    peak_payment_hours = mpesa_orders.filter(payment_status='paid').annotate(hour=ExtractHour('payment_completed_at')).values('hour').annotate(
         payment_count=Count('id')
     ).order_by('-payment_count')[:10]
 
@@ -1768,7 +1768,7 @@ def get_delivery_guy_week_deliveries(request, delivery_guy_id):
 
 @staff_member_required(login_url='admin_login')
 def site_settings_view(request):
-    """Manage site settings and PayHero configuration for the store"""
+    """Manage site settings and Daraja configuration for the store"""
     user = request.user
     store = getattr(user, 'store', None)
     
@@ -1791,14 +1791,6 @@ def site_settings_view(request):
             
             # Store-specific settings
             if store:
-                # PayHero settings
-                if 'payhero_username' in data:
-                    store.payhero_username = data.get('payhero_username')
-                if 'payhero_api_key' in data:
-                    store.payhero_api_key = data.get('payhero_api_key')
-                if 'payhero_account_number' in data:
-                    store.payhero_account_number = data.get('payhero_account_number')
-                
                 # Branding settings (only if not on base plan)
                 if store.plan != 'base':
                     if 'shop_name' in data:
@@ -1818,7 +1810,6 @@ def site_settings_view(request):
                     'success': True,
                     'message': 'Settings updated successfully',
                     'delivery_fee': float(site_settings.delivery_fee),
-                    'payhero_username': store.payhero_username,
                     'shop_name': store.shop_name
                 })
             

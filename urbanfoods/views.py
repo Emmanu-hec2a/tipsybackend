@@ -14,7 +14,7 @@ import uuid
 from urbanfoods.notifications import send_admin_order_notification, send_customer_order_confirmation
 from urbanfoods.utils import notify_new_order
 import logging
-from .mpesa_utils import mpesa
+# from .mpesa_utils import mpesa  # Removed global instance
 from .models import MpesaTransaction, OrderStatusHistory
 from django.db import transaction
 from django.conf import settings
@@ -51,17 +51,23 @@ def offline(request):
     """Offline page for PWA"""
     return render(request, 'offline.html')
 
-def get_delivery_fee_for_store(store_type, store=None):
+def get_delivery_fee_for_store(store_type, store=None, lat=None, lng=None):
     """
     Delivery fee logic:
-    1. If a specific store is provided, use its configured delivery fee.
-    2. Otherwise, fallback to the global site settings if it's a liquor store.
+    1. If lat/lng are provided, calculate based on distance using global SiteSettings.
+    2. If a specific store is provided and no coordinates, use its configured delivery fee.
+    3. Otherwise, fallback to the legacy global site settings.
     """
+    from .utils import calculate_delivery_fee
+    
+    if lat is not None and lng is not None and store and store.latitude and store.longitude:
+        return calculate_delivery_fee(lat, lng, store.latitude, store.longitude, store=store)
+
     if store:
         return store.delivery_fee
     
     if store_type == 'liquor':
-        return SiteSettings.get_delivery_fee()
+        return SiteSettings.get_instance().delivery_fee
     return Decimal('0.00')
 
 from django.db.models import Avg, Count, Q
@@ -619,68 +625,8 @@ def robots_txt(request):
 
 # ==================== MPESA INTEGRATION ====================
 
-@login_required
-@require_http_methods(["POST"])
-def initiate_mpesa_payment(request):
-    """Initiate MPESA payment for an existing order"""
-    data = json.loads(request.body)
-    order_number = data.get('order_number')
-
-    if not order_number:
-        return JsonResponse({'success': False, 'message': 'Order number required'})
-
-    try:
-        order = Order.objects.get(order_number=order_number, user=request.user)
-    except Order.DoesNotExist:
-        return JsonResponse({'success': False, 'message': 'Order not found'})
-
-    if order.payment_status == 'completed':
-        return JsonResponse({'success': False, 'message': 'Payment already completed'})
-
-    from .mpesa_utils import mpesa
-
-    try:
-        # Format phone number for MPESA
-        formatted_phone = mpesa.format_phone_number(order.phone_number)
-
-        # Initiate STK push
-        stk_result = mpesa.initiate_stk_push(
-            phone_number=formatted_phone,
-            amount=int(order.total),
-            account_reference=order.order_number,
-            transaction_desc=f"Payment for Order {order.order_number}",
-            store_type=order.store_type
-        )
-
-        if stk_result['success']:
-            # Update order with MPESA details
-            order.mpesa_checkout_request_id = stk_result['checkout_request_id']
-            order.payment_status = 'processing'
-            order.save()
-
-            # Create status history
-            OrderStatusHistory.objects.create(
-                order=order,
-                status=order.status,
-                notes=f'MPESA payment initiated. STK Push sent to {order.phone_number}'
-            )
-
-            return JsonResponse({
-                'success': True,
-                'message': stk_result['customer_message'],
-                'checkout_request_id': stk_result['checkout_request_id']
-            })
-        else:
-            return JsonResponse({
-                'success': False,
-                'message': stk_result['message']
-            })
-
-    except Exception as e:
-        return JsonResponse({
-            'success': False,
-            'message': f'Payment initiation failed: {str(e)}'
-        })
+# Removed duplicate initiate_mpesa_payment from here.
+# It is defined later in the file near line 1256.
 
 import json
 import logging
@@ -696,7 +642,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from .models import Cart, MpesaTransaction, Order, OrderItem, OrderStatusHistory
-from .mpesa_utils import mpesa
+# from .mpesa_utils import mpesa  # Removed global instance
 from .utils import is_within_delivery_zone
 import logging, json
 from django.utils import timezone
@@ -758,54 +704,35 @@ def safaricom_ip_required(view_func):
     return wrapper
 
 
-# ─────────────────────────────────────────────────────────────
-#  SHARED PAYMENT CONFIRMATION  (single source of truth)
-# ─────────────────────────────────────────────────────────────
+# ── Shared Payment Confirmation ──
 def _confirm_payment(order, receipt_number=None, notes='Payment confirmed'):
-    """
-    Mark an order as fully paid. Handles all side-effects so both
-    the callback and the STK-query fallback stay in sync automatically.
-
-    Must be called inside a transaction.atomic() block.
-    """
-    order.payment_status = 'completed'
+    """Mark order as paid and handle inventory/loyalty side effects."""
+    order.payment_status = 'paid'
     order.status = 'pending'
     order.payment_completed_at = timezone.now()
     if receipt_number:
         order.mpesa_receipt_number = receipt_number
     order.save()
 
-    # ── Update sales stats atomically with F() + bulk_update ──
+    # Update stats
     items = list(order.items.select_related('food_item'))
     for item in items:
-        # F() defers the increment to the DB — race-condition safe
         item.food_item.times_ordered = F('times_ordered') + item.quantity
 
-    from .models import FoodItem  # local import avoids circular at module level
-    FoodItem.objects.bulk_update(
-        [item.food_item for item in items],
-        ['times_ordered']
-    )
+    from .models import FoodItem
+    FoodItem.objects.bulk_update([item.food_item for item in items], ['times_ordered'])
 
-    # ── Clear cart (items only — keep the Cart row for future orders) ──
-    Cart.objects.filter(user=order.user).first() and \
-        Cart.objects.filter(user=order.user).first().items.all().delete()
-    # Cleaner version:
+    # Clear Cart
     from .models import CartItem
     CartItem.objects.filter(cart__user=order.user).delete()
 
-    # ── Award loyalty points ──
+    # Loyalty
     order.user.loyalty_points = F('loyalty_points') + int(order.total)
     order.user.save(update_fields=['loyalty_points'])
 
-    # ── Status history ──
-    OrderStatusHistory.objects.create(
-        order=order,
-        status='pending',
-        notes=notes
-    )
+    OrderStatusHistory.objects.create(order=order, status='pending', notes=notes)
 
-    # ── Notifications ──
+    # Notifications
     from .utils import notify_payment_received
     notify_payment_received(order)
     send_customer_order_confirmation(order)
@@ -850,7 +777,7 @@ def place_order(request):
     lng = data.get('longitude')
     address_string = data.get('address_string')
 
-    if not payment_method not in ['mpesa', 'cash']:
+    if payment_method not in ['mpesa', 'cash']:
         return JsonResponse({'success': False, 'message': 'Invalid payment method'})
 
     # ── Totals ──
@@ -875,7 +802,7 @@ def place_order(request):
 
     store_type = first_item.food_item.store_type if first_item else 'liquor'
     
-    delivery_fee = get_delivery_fee_for_store(store_type, store=store)
+    delivery_fee = get_delivery_fee_for_store(store_type, store=store, lat=lat, lng=lng)
     
     total = subtotal + delivery_fee
     estimated_delivery = timezone.now() + timezone.timedelta(minutes=30)
@@ -884,8 +811,11 @@ def place_order(request):
     #  M-PESA PAYMENT
     # ══════════════════════════════
     if payment_method == 'mpesa':
+        from .mpesa_utils import MpesaIntegration
+        mpesa_service = MpesaIntegration(store=store)
+        
         try:
-            formatted_phone = mpesa.format_phone_number(phone_number)
+            formatted_phone = mpesa_service.format_phone_number(phone_number)
         except ValueError as e:
             return JsonResponse({'success': False, 'message': str(e)})
 
@@ -930,30 +860,17 @@ def place_order(request):
                 )
 
                 # ── Initiate STK push ──
-                # Check if store has PayHero configured
-                if store and store.payhero_api_key and store.payhero_username:
-                    stk_response = initiate_payhero_stk_push(order)
-                    # initiate_payhero_stk_push returns the json data on success
-                else:
-                    stk_response = mpesa.initiate_stk_push(
-                        phone_number=formatted_phone,
-                        amount=int(total),
-                        account_reference=order.order_number,
-                        transaction_desc="Tipsy Theoryy Order",
-                        store_type=store_type,
-                    )
+                stk_response = mpesa_service.initiate_stk_push(
+                    phone_number=formatted_phone,
+                    amount=int(total),
+                    account_reference=order.order_number,
+                    transaction_desc="Tipsy Theoryy Order"
+                )
 
-                if not stk_response.get('success') and not (stk_response.get('status') == 'Success' or (stk_response.get('response') and stk_response['response'].get('Status') == 'Success')):
-                    # Let atomic() roll back the order
-                    raise Exception(stk_response.get('message') or stk_response.get('response', {}).get('Message', 'STK push failed'))
+                if not stk_response.get('success'):
+                    raise Exception(stk_response.get('message') or 'STK push failed')
 
-                checkout_request_id = stk_response.get('checkout_request_id') or stk_response.get('response', {}).get('CheckoutRequestID')
-                if not checkout_request_id:
-                    # PayHero might not return this the same way, but it's used for polling
-                    # For PayHero we might need to rely on the callback more
-                    pass
-
-                order.mpesa_checkout_request_id = checkout_request_id
+                order.mpesa_checkout_request_id = stk_response.get('checkout_request_id')
                 order.save(update_fields=['mpesa_checkout_request_id'])
 
         except Exception as e:
@@ -1126,8 +1043,10 @@ def mpesa_callback(request):
             return HttpResponse("OK")
 
         # ── Validate phone ──
+        from .mpesa_utils import MpesaIntegration
+        mpesa_service = MpesaIntegration(store=order.store)
         try:
-            expected_phone = mpesa.format_phone_number(order.phone_number)
+            expected_phone = mpesa_service.format_phone_number(order.phone_number)
         except ValueError:
             expected_phone = order.phone_number
 
@@ -1139,7 +1058,7 @@ def mpesa_callback(request):
             )
             return HttpResponse("OK")
 
-        # ── All checks passed — confirm payment ──
+    # ── All checks passed — confirm payment ──
         with transaction.atomic():
             _confirm_payment(
                 order,
@@ -1179,16 +1098,18 @@ def mpesa_stk_query(request):
         return JsonResponse({'success': False, 'message': 'Order not found'})
 
     # ── Idempotency: already done via callback ──
-    if order.payment_status == 'completed':
+    if order.payment_status == 'paid':
         return JsonResponse({
             'success': True,
             'result_code': 0,
             'result_desc': 'Payment already confirmed',
-            'payment_status': 'completed',
+            'payment_status': 'paid',
         })
 
     # ── Ask Safaricom ──
-    result = mpesa.query_stk_status(checkout_request_id)
+    from .mpesa_utils import MpesaIntegration
+    mpesa_service = MpesaIntegration(store=order.store)
+    result = mpesa_service.query_stk_status(checkout_request_id)
 
     # Log structured
     log_mpesa_event(
@@ -1212,7 +1133,7 @@ def mpesa_stk_query(request):
                 order,
                 notes='Payment confirmed via STK query',
             )
-        result['payment_status'] = 'completed'
+        result['payment_status'] = 'paid'
 
     elif result_code in [1, 1032, 1037]:
         # 1    = Insufficient funds
@@ -1254,103 +1175,6 @@ def check_order_payment_status(request, order_number):
 
 
 # ─────────────────────────────────────────────────────────────
-#  PAYHERO MULTI-TENANT PAYMENTS
-# ─────────────────────────────────────────────────────────────
-
-def initiate_payhero_stk_push(order):
-    store = order.store
-    if not store or not store.payhero_api_key or not store.payhero_username:
-        raise ValueError("Store payment not configured. Contact store owner.")
-
-    # Format phone for PayHero (expects 254...)
-    phone = order.phone_number.replace('+', '')
-    if phone.startswith('0'):
-        phone = '254' + phone[1:]
-
-    payload = {
-        'api_key': store.payhero_api_key,
-        'username': store.payhero_username,
-        'amount': int(order.total),
-        'phone': phone,
-        'user_reference': f'ORD-{order.id}'
-    }
-
-    try:
-        response = requests.post(
-            'https://payherokenya.com/sps/portal/app/stk.php',
-            json=payload,
-            timeout=15
-        )
-        data = response.json()
-        
-        # PayHero returns status inside the response object sometimes, or at top level
-        if data.get('status') == 'Success' or (data.get('response') and data['response'].get('Status') == 'Success'):
-            order.payment_status = 'pending'
-            order.save(update_fields=['payment_status'])
-            return data
-        else:
-            error_msg = data.get('message') or (data.get('response') and data['response'].get('Message')) or 'STK push failed'
-            raise Exception(error_msg)
-    except Exception as e:
-        logger.error(f"PayHero STK Error: {str(e)}")
-        raise
-
-@csrf_exempt
-@api_view(['POST'])
-def payhero_callback(request):
-    """
-    Global PayHero callback handler.
-    Expects JSON data with user_reference like 'ORD-42'
-    """
-    data = request.data
-    user_ref = data.get('user_reference')
-    
-    if not user_ref or not user_ref.startswith('ORD-'):
-        return Response({'status': 'ignored'}, status=200)
-
-    try:
-        order_id = user_ref.split('-')[1]
-        order = Order.objects.get(id=order_id)
-        store = order.store
-    except (IndexError, Order.DoesNotExist):
-        return Response({'status': 'not_found'}, status=404)
-
-    from .utils import send_telegram_notification
-    
-    if data.get('status') == 'Success':
-        with transaction.atomic():
-            # Reuse the confirm logic if possible or manually update
-            order.payment_status = 'paid'
-            order.status = 'confirmed' # Or 'pending' per strict sequence
-            order.save()
-            
-            # Record transaction details if provided
-            if data.get('mpesa_code'):
-                order.mpesa_receipt_number = data.get('mpesa_code')
-                order.save(update_fields=['mpesa_receipt_number'])
-
-            OrderStatusHistory.objects.create(
-                order=order,
-                status='confirmed',
-                notes=f"PayHero confirmed. Receipt: {data.get('mpesa_code')}"
-            )
-            
-            from .utils import notify_payment_received
-            notify_payment_received(order)
-    else:
-        order.payment_status = 'failed'
-        order.save(update_fields=['payment_status'])
-        
-        if store and store.telegram_chat_id:
-            send_telegram_notification(
-                store.telegram_chat_id,
-                f"❌ <b>Payment Failed</b>\nOrder: #{order.order_number}\nReason: {data.get('message', 'Unknown error')}"
-            )
-            
-    return Response({'status': 'ok'})
-
-
-# ─────────────────────────────────────────────────────────────
 #  INITIATE MPESA PAYMENT  (retry for existing order)
 # ─────────────────────────────────────────────────────────────
 @login_required
@@ -1368,20 +1192,22 @@ def initiate_mpesa_payment(request):
     except Order.DoesNotExist:
         return JsonResponse({'success': False, 'message': 'Order not found'})
 
-    if order.payment_status == 'completed':
+    if order.payment_status == 'paid':
         return JsonResponse({'success': False, 'message': 'Payment already completed'})
 
+    from .mpesa_utils import MpesaIntegration
+    mpesa_service = MpesaIntegration(store=order.store)
+
     try:
-        formatted_phone = mpesa.format_phone_number(order.phone_number)
+        formatted_phone = mpesa_service.format_phone_number(order.phone_number)
     except ValueError as e:
         return JsonResponse({'success': False, 'message': str(e)})
 
-    stk_result = mpesa.initiate_stk_push(
+    stk_result = mpesa_service.initiate_stk_push(
         phone_number=formatted_phone,
         amount=int(order.total),
         account_reference=order.order_number,
-        transaction_desc=f"Order {order.order_number}",
-        store_type=order.store_type,
+        transaction_desc=f"Order {order.order_number}"
     )
 
     # Log initiation

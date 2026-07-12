@@ -377,3 +377,8 @@ media/
 
 # Project specific
 # Add any project-specific files or directories here
+*.json
+!manifest.json
+!composer.json
+!package.json
+!package-lock.json

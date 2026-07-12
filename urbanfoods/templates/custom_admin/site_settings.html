@@ -23,11 +23,6 @@
             </li>
             {% if store %}
             <li class="nav-item" role="presentation">
-                <button class="nav-link" id="payment-tab" data-bs-toggle="pill" data-bs-target="#payment" type="button" role="tab">
-                    <i class="fas fa-credit-card me-2"></i>Payment (PayHero)
-                </button>
-            </li>
-            <li class="nav-item" role="presentation">
                 <button class="nav-link" id="branding-tab" data-bs-toggle="pill" data-bs-target="#branding" type="button" role="tab">
                     <i class="fas fa-paint-brush me-2"></i>Branding
                 </button>
@@ -68,51 +63,7 @@
                 </div>
             </div>
 
-            <!-- Payment Settings Tab -->
-            {% if store %}
-            <div class="tab-pane fade" id="payment" role="tabpanel">
-                <div class="row">
-                    <div class="col-lg-8">
-                        <div class="card border-0 shadow-sm">
-                            <div class="card-header bg-white border-bottom p-4">
-                                <h5 class="mb-0">
-                                    <i class="fas fa-wallet text-primary me-2"></i>PayHero Integration
-                                </h5>
-                            </div>
-                            <div class="card-body p-4">
-                                <form id="paymentForm">
-                                    <div class="mb-3">
-                                        <label for="payheroUsername" class="form-label fw-semibold">PayHero Username</label>
-                                        <input type="text" class="form-control" id="payheroUsername" value="{{ store.payhero_username|default:'' }}" placeholder="Enter PayHero username">
-                                    </div>
-                                    <div class="mb-3">
-                                        <label for="payheroApiKey" class="form-label fw-semibold">PayHero API Key</label>
-                                        <input type="password" class="form-control" id="payheroApiKey" value="{{ store.payhero_api_key|default:'' }}" placeholder="Enter PayHero API key">
-                                    </div>
-                                    <div class="mb-4">
-                                        <label for="payheroAccountNumber" class="form-label fw-semibold">PayHero Account Number (Optional)</label>
-                                        <input type="text" class="form-control" id="payheroAccountNumber" value="{{ store.payhero_account_number|default:'' }}" placeholder="e.g. TipsyOrder">
-                                        <small class="text-muted">This appears on the customer's phone during STK push</small>
-                                    </div>
-                                    <div class="alert alert-info small">
-                                        <i class="fas fa-question-circle me-1"></i>
-                                        Don't have a PayHero account? <a href="https://payherokenya.com/sps/portal" target="_blank" class="alert-link">Sign up here</a> to receive payments directly.
-                                    </div>
-                                    <div class="d-flex gap-2">
-                                        <button type="submit" class="btn btn-primary btn-lg flex-grow-1">
-                                            <i class="fas fa-save me-2"></i>Save Payment Credentials
-                                        </button>
-                                        <button type="button" id="testPaymentBtn" class="btn btn-outline-info btn-lg">
-                                            <i class="fas fa-plug me-2"></i>Test
-                                        </button>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            {% endif %}
+            <!-- Payment Settings Tab Removed (Legacy PayHero) -->
 
             <!-- Branding Settings Tab -->
             {% if store %}
@@ -196,25 +147,6 @@
         e.preventDefault();
         const deliveryFee = document.getElementById('deliveryFee').value;
         updateSettings({ delivery_fee: deliveryFee });
-    });
-
-    // Payment Settings Submit
-    {% if store %}
-    document.getElementById('paymentForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
-        const username = document.getElementById('payheroUsername').value;
-        const apiKey = document.getElementById('payheroApiKey').value;
-        const account = document.getElementById('payheroAccountNumber').value;
-        updateSettings({
-            payhero_username: username,
-            payhero_api_key: apiKey,
-            payhero_account_number: account
-        });
-    });
-
-    document.getElementById('testPaymentBtn').addEventListener('click', function() {
-        showAlert('Connecting to PayHero... (Simulation)', 'info');
-        setTimeout(() => showAlert('Connection successful! Your credentials are valid.', 'success'), 1500);
     });
 
     // Branding Form Submit
