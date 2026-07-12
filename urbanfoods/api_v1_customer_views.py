@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import os
 from django.shortcuts import get_object_or_404
-from django.db.models import Q, F, ExpressionWrapper, DecimalField, Avg
+from django.db.models import Q, F, ExpressionWrapper, DecimalField, Avg, Exists, OuterRef, Value, BooleanField
 from django.db.models.functions import Sqrt, Power
 from .models import Store, FoodItem, Order, Rating, SavedAddress, OrderItem, OrderStatusHistory, FoodCategory
 from .api_v1_serializers import StoreSerializer, FoodItemSerializer, OrderSerializer, UserSerializer, SavedAddressSerializer, FoodCategorySerializer
@@ -54,7 +54,20 @@ class CustomerStoreListView(generics.ListAPIView):
 
     def get_queryset(self):
         # Base queryset: active stores, prioritize Pro stores first
-        queryset = Store.objects.filter(is_active=True).order_by('-is_pro', 'name')
+        queryset = Store.objects.filter(is_active=True).select_related('owner')
+        
+        # Annotate is_favourite if user is authenticated
+        user = self.request.user
+        if user.is_authenticated:
+            queryset = queryset.annotate(
+                is_favourite=Exists(
+                    user.favourite_stores.filter(id=OuterRef('pk'))
+                )
+            )
+        else:
+            queryset = queryset.annotate(is_favourite=Value(False, output_field=BooleanField()))
+
+        queryset = queryset.order_by('-is_pro', 'name')
         
         # Get coordinates from query params
         lat = self.request.query_params.get('lat')
