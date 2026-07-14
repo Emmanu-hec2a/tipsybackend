@@ -40,6 +40,8 @@ CSRF_TRUSTED_ORIGINS = [
     "https://*.railway.app",
     "https://tipsybackend.up.railway.app",
     "https://tipsytheoryy-merchant.pages.dev",
+    "https://api.tipsytheoryy.com",
+    "https://merchants.tipsytheoryy.com",
 ]
 
 # SECURE_SSL_REDIRECT = True
@@ -305,6 +307,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://tipsytheoryy-merchant.pages.dev",
+    "https://api.tipsytheoryy.com",
+    "https://merchants.tipsytheoryy.com",
 ]
 
 # MPESA Configuration
