@@ -92,4 +92,6 @@ urlpatterns = [
     path('auth/', include(auth_patterns)),
     path('billing/callback/', api_v1_billing_views.subscription_callback, name='subscription_callback'),
     path('geocode/reverse/', views.reverse_geocode, name='api_reverse_geocode'),
+    path('orders/<str:order_number>/verification-image/', views.OrderVerificationImageView.as_view(), name='order_verification_image'),
+    path('ai/chat/', views.TheoryAIChatView.as_view(), name='ai_chat'),
 ]

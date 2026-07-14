@@ -36,9 +36,16 @@ def subscription_callback(request):
         store = Store.objects.get(id=store_id)
         
         if result_code == 0:
-            store.subscription_active = True
             store.billing_status = 'active'
+            store.is_active = True # Reactivate store upon successful payment
             store.subscription_expires = date.today() + timedelta(days=30)
+            
+            # Synchronize is_pro based on the plan
+            if store.plan == 'pro':
+                store.is_pro = True
+            elif store.plan == 'base':
+                store.is_pro = False
+
             store.save()
             
             # Extract receipt number if available
@@ -81,14 +88,32 @@ class PayNowView(APIView):
 
     def post(self, request):
         user = request.user
+        phone = request.data.get('phone')
+        new_plan = request.data.get('plan') # 'base', 'pro', or 'custom'
+        
         try:
             store = user.store
+            
+            # If a new plan is requested, update the store's plan and price temporarily
+            # but don't mark it as active yet. The callback will handle the activation.
+            if new_plan and new_plan in ['base', 'pro', 'custom']:
+                store.plan = new_plan
+                # Update price based on plan if necessary
+                if new_plan == 'base':
+                    store.plan_price = 5000
+                elif new_plan == 'pro':
+                    store.plan_price = 15000
+                store.save()
+
             billing = SubscriptionBilling()
-            result = billing.charge_subscription(store)
+            # Pass the custom phone number if provided, otherwise it will default to owner's phone
+            result = billing.charge_subscription(store, custom_phone=phone)
+            
             if result['success']:
-                return Response({'message': 'STK Push sent to your phone.'})
+                return Response({'message': 'STK Push sent. Once paid, your plan will be updated.'})
             return Response({'error': result['message']}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
+            logger.exception("PayNowView error")
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 class SubscriptionHistoryView(APIView):

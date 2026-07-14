@@ -39,9 +39,10 @@ class Command(BaseCommand):
                 
             if days_left <= 0 and store.billing_status != 'suspended':
                 store.billing_status = 'suspended'
+                store.is_active = False # Deactivate store visibility
                 store.save()
                 send_telegram(store.telegram_chat_id,
-                    f"🔒 *Subscription Expired*\nSubscription for *{store.name}* has expired. Your store is now paused. Renew to reactivate.")
-                self.stdout.write(self.style.WARNING(f"Suspended {store.name} due to expiry"))
+                    f"🔒 *Subscription Expired*\nSubscription for *{store.name}* has expired. Your store is now paused and hidden from customers. Renew to reactivate.")
+                self.stdout.write(self.style.WARNING(f"Suspended and Deactivated {store.name} due to expiry"))
         
         self.stdout.write(self.style.SUCCESS("Finished checking expiries."))

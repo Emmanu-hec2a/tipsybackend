@@ -96,11 +96,20 @@ class Store(models.Model):
     plan = models.CharField(max_length=20, choices=[
         ('base', 'Base'), ('pro', 'Pro'), ('custom', 'Custom')], default='base')
     plan_price = models.DecimalField(max_digits=10, decimal_places=2, default=5000)
-    subscription_active = models.BooleanField(default=False)
     subscription_expires = models.DateField(null=True, blank=True)
     billing_status = models.CharField(max_length=20, choices=[
         ('active', 'Active'), ('grace_period', 'Grace Period'),
         ('suspended', 'Suspended')], default='active')
+
+    @property
+    def subscription_active(self):
+        """Returns True if subscription is active and not expired."""
+        if self.billing_status == 'suspended':
+            return False
+        if not self.subscription_expires:
+            return False
+        from datetime import date
+        return self.subscription_expires >= date.today()
     last_payment_date = models.DateField(null=True, blank=True)
     last_expiry_reminder_sent = models.DateField(null=True, blank=True)
 
@@ -337,6 +346,7 @@ class Order(models.Model):
     requires_rider_verification = models.BooleanField(default=False)
     rider_verified_at = models.DateTimeField(null=True, blank=True)
     rider_verification_method = models.CharField(max_length=50, null=True, blank=True)
+    verification_image = models.FileField(upload_to='verifications/', null=True, blank=True)
 
     order_number = models.CharField(max_length=20, unique=True, editable=False)
     is_test_order = models.BooleanField(default=False)

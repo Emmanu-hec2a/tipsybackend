@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from unfold.admin import ModelAdmin
+from django.utils.html import format_html
+from django.urls import reverse
 from .mpesa_utils import encrypt_value, decrypt_value
 from django.forms import PasswordInput, CharField
 from .models import *
@@ -13,6 +15,7 @@ class CustomUserAdmin(BaseUserAdmin, ModelAdmin):
     ordering = ('-date_joined',)
 
     fieldsets = BaseUserAdmin.fieldsets + (
+        ('Age Verification', {'fields': ('is_age_verified', 'date_of_birth', 'risk_score', 'verification_metadata')}),
         ('SaaS Info', {'fields': ('role', 'phone', 'business_name', 'business_location', 'is_approved', 'assigned_store', 'is_available', 'telegram_chat_id', 'fcm_token')}),
         ('Rider Stats', {'fields': ('total_deliveries', 'avg_rating', 'acceptance_rate')}),
         ('Bank Info', {'fields': ('bank_account_name', 'bank_account_number', 'bank_name')}),
@@ -52,8 +55,16 @@ class OrderAdmin(ModelAdmin):
     list_display = ('order_number', 'user', 'store_type', 'status', 'assigned_rider', 'total', 'payment_method', 'payment_status', 'payment_type', 'mpesa_receipt_number', 'payment_completed_at', 'created_at')
     list_filter = ('status', 'store_type', 'payment_status', 'payment_type', 'created_at', 'estimated_delivery', 'assigned_rider')
     search_fields = ('order_number', 'user__username', 'user__email', 'mpesa_receipt_number')
-    readonly_fields = ('order_number', 'created_at', 'updated_at', 'payment_completed_at', 'mpesa_checkout_request_id', 'mpesa_transaction_date')
+    readonly_fields = ('order_number', 'created_at', 'updated_at', 'payment_completed_at', 'mpesa_checkout_request_id', 'mpesa_transaction_date', 'verification_image_display')
     ordering = ('-created_at',)
+
+    def verification_image_display(self, obj):
+        if obj.verification_image:
+            url = reverse('order_verification_image', args=[obj.order_number])
+            return format_html('<a href="{}" target="_blank" style="color: #0D3B30; font-weight: bold;">View Midnight Mirror Verification (AES-256 Decrypted)</a>', url)
+        return "No image provided"
+    
+    verification_image_display.short_description = "Midnight Mirror"
 
     fieldsets = (
         ('Order Information', {
@@ -61,6 +72,10 @@ class OrderAdmin(ModelAdmin):
         }),
         ('Delivery Details', {
             'fields': ('hostel', 'room_number', 'phone_number', 'latitude', 'longitude', 'address_string', 'google_maps_link', 'delivery_notes', 'assigned_rider', 'estimated_delivery', 'delivered_at')
+        }),
+        ('Age Verification (Midnight Mirror)', {
+            'fields': ('requires_rider_verification', 'rider_verified_at', 'rider_verification_method', 'verification_image_display'),
+            'description': 'Encrypted verification data taken during delivery.'
         }),
         ('Pricing', {
             'fields': ('subtotal', 'delivery_fee', 'tip_amount', 'rider_base_fare', 'total', 'rating_value', 'review_text')
@@ -113,8 +128,8 @@ class PromotionAdmin(ModelAdmin):
 
 @admin.register(Store)
 class StoreAdmin(ModelAdmin):
-    list_display = ('name', 'owner', 'subdomain', 'is_active', 'plan', 'subscription_active')
-    list_filter = ('is_active', 'plan', 'subscription_active', 'billing_status')
+    list_display = ('name', 'owner', 'subdomain', 'is_active', 'plan', 'is_pro', 'subscription_active')
+    list_filter = ('is_active', 'plan', 'is_pro', 'billing_status')
     search_fields = ('name', 'subdomain', 'owner__username')
     prepopulated_fields = {'subdomain': ('name',)}
 
@@ -128,6 +143,7 @@ class StoreAdmin(ModelAdmin):
         }),
         ('Billing', {'fields': ('plan', 'plan_price', 'subscription_active', 'subscription_expires', 'billing_status', 'last_payment_date')}),
     )
+    readonly_fields = ('subscription_active',)
 
     def save_model(self, request, obj, form, change):
         for field in ['mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_passkey']:

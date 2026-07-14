@@ -19,6 +19,7 @@ VALID_TRANSITIONS = {
 
 class RiderOrderStatusView(APIView):
     permission_classes = [IsRider]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
     
     def patch(self, request, order_id):
         try:
@@ -43,12 +44,26 @@ class RiderOrderStatusView(APIView):
             # 🛡️ Guard: Ensure verification is done if required
             if order.requires_rider_verification and not order.rider_verified_at:
                 verification_method = request.data.get('verification_method')
+                verification_image = request.FILES.get('verification_image')
+                
                 if not verification_method:
                     return Response({
                         'error': 'verification_required',
                         'message': 'Recipent ID verification is required for this order.'
                     }, status=status.HTTP_403_FORBIDDEN)
                 
+                # 🛡️ Midnight Mirror: Encrypt image if provided
+                if verification_image:
+                    from .utils import encrypt_verification_image
+                    from django.core.files.base import ContentFile
+                    
+                    img_data = verification_image.read()
+                    encrypted_data = encrypt_verification_image(img_data)
+                    
+                    # Save as a file with .enc extension
+                    file_name = f"order_{order.order_number}_verify.enc"
+                    order.verification_image.save(file_name, ContentFile(encrypted_data), save=False)
+
                 order.rider_verified_at = timezone.now()
                 order.rider_verification_method = verification_method
 

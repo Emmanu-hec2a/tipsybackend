@@ -1,6 +1,6 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, viewsets, permissions
+from rest_framework import status, viewsets, permissions, authentication
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.throttling import ScopedRateThrottle
 from django.utils import timezone
@@ -12,7 +12,7 @@ from .api_v1_serializers import (
     StoreSerializer, FoodCategorySerializer, PromotionSerializer,
     SubscriptionPaymentSerializer, OrderItemSerializer
 )
-from .permissions import IsPartner
+from .permissions import IsPartner, QueryParamJWTAuthentication
 from .utils import haversine_distance_km
 from .tasks import send_marketing_blast_task
 from datetime import timedelta
@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 class PartnerBaseView:
     permission_classes = [IsPartner]
+    authentication_classes = [QueryParamJWTAuthentication, authentication.SessionAuthentication]
     
     def get_store(self, request):
         try:

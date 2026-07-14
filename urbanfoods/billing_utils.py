@@ -56,7 +56,7 @@ class SubscriptionBilling:
             logger.exception("Failed to obtain Subscription MPESA access token")
             return None
 
-    def charge_subscription(self, store):
+    def charge_subscription(self, store, custom_phone=None):
         access_token = self.get_access_token()
         if not access_token:
             return {'success': False, 'message': 'Access token error'}
@@ -65,12 +65,17 @@ class SubscriptionBilling:
         data_to_encode = f"{self.shortcode}{self.passkey}{timestamp}"
         password = base64.b64encode(data_to_encode.encode()).decode()
 
-        # Format phone: ensure it starts with 254
-        phone = ''.join(filter(str.isdigit, str(store.owner.phone)))
-        if phone.startswith('0'):
+        # Use custom phone if provided, otherwise fallback to store owner's phone
+        raw_phone = custom_phone if custom_phone else store.owner.phone
+        phone = ''.join(filter(str.isdigit, str(raw_phone)))
+        
+        if phone.startswith('0') and len(phone) == 10:
             phone = '254' + phone[1:]
         elif not phone.startswith('254'):
             phone = '254' + phone
+            
+        if len(phone) != 12:
+            return {'success': False, 'message': 'Invalid phone number format. Use 07... or 254...'}
 
         payload = {
             "BusinessShortCode": self.shortcode,

@@ -1,4 +1,5 @@
 from rest_framework import generics, permissions, status
+from datetime import date
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -53,8 +54,12 @@ class CustomerStoreListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        # Base queryset: active stores, prioritize Pro stores first
-        queryset = Store.objects.filter(is_active=True).select_related('owner')
+        # Base queryset: active stores with valid subscriptions, prioritize Pro stores first
+        queryset = Store.objects.filter(
+            is_active=True, 
+            subscription_expires__gte=date.today(),
+            billing_status='active'
+        ).select_related('owner')
         
         # Annotate is_favourite if user is authenticated
         user = self.request.user
@@ -96,9 +101,15 @@ class CustomerStoreListView(generics.ListAPIView):
         return queryset
 
 class CustomerStoreDetailView(generics.RetrieveAPIView):
-    queryset = Store.objects.all()
     serializer_class = StoreSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Store.objects.filter(
+            is_active=True, 
+            subscription_expires__gte=date.today(),
+            billing_status='active'
+        )
 
 @method_decorator(cache_page(60*5), name='dispatch')
 class CustomerCategoryListView(generics.ListAPIView):
@@ -155,8 +166,13 @@ class CustomerProductListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        # Prioritize products from Pro stores
-        queryset = FoodItem.objects.filter(is_active=True).order_by('-store__is_pro', 'name')
+        # Prioritize products from Pro stores with valid subscriptions
+        queryset = FoodItem.objects.filter(
+            is_active=True,
+            store__is_active=True,
+            store__subscription_expires__gte=date.today(),
+            store__billing_status='active'
+        ).order_by('-store__is_pro', 'name')
         
         store_id = self.request.query_params.get('store_id')
         if store_id:
@@ -271,6 +287,9 @@ class CustomerPlaceOrderView(APIView):
                 # Calculate totals and validate single store
                 subtotal = 0
                 order_items_to_create = []
+                # Calculate totals and validate single store
+                subtotal = 0
+                order_items_to_create = []
                 for item in items_data:
                     food_item = get_object_or_404(FoodItem, id=item.get('product_id'))
                     
@@ -282,6 +301,7 @@ class CustomerPlaceOrderView(APIView):
 
                     quantity = item.get('quantity', 1)
                     subtotal += food_item.price * quantity
+                    
                     order_items_to_create.append(OrderItem(
                         food_item=food_item,
                         quantity=quantity,
@@ -292,10 +312,10 @@ class CustomerPlaceOrderView(APIView):
                 delivery_fee = store.delivery_fee
                 total = subtotal + delivery_fee
 
-                # Logic: If risk was high but not high enough for an immediate block (403),
-                # we flag it for Rider Verification at the door.
+                # 🛡️ Tiered Verification Logic
                 risk = calculate_risk_score(request.user, data)
-                requires_verification = risk >= 40 # Medium risk flags the rider check
+                # Auto-require for high-value (>15k) OR medium-risk users
+                requires_verification = (subtotal >= 15000) or (risk >= 40)
 
                 # Initial status is 'payment_pending' if M-Pesa is used, otherwise 'pending' for Cash
                 initial_status = 'payment_pending' if data.get('payment_method') == 'mpesa' else 'pending'

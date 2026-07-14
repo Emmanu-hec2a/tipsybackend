@@ -4,6 +4,43 @@ import os
 from pywebpush import webpush
 from .models import PushSubscription
 from math import radians, sin, cos, sqrt, atan2
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+import base64
+import os
+
+def get_aes_key():
+    """Get or generate a 32-byte key for AES-256."""
+    from django.conf import settings
+    key = getattr(settings, 'ENCRYPTION_KEY', os.environ.get('ENCRYPTION_KEY'))
+    if not key:
+        # Fallback for dev
+        return b'6csUuoMhN7dvrad3XaJ5ApYcFPV2AEFtlwSUEAzoREU='
+    
+    # Ensure it's 32 bytes. If it's a base64 string from Fernet, it might be 32 bytes decoded.
+    try:
+        decoded = base64.b64decode(key)
+        if len(decoded) == 32:
+            return decoded
+    except Exception:
+        pass
+        
+    return key.encode().ljust(32)[:32]
+
+def encrypt_verification_image(file_data):
+    """Encrypt image data using AES-256-GCM."""
+    key = get_aes_key()
+    aesgcm = AESGCM(key)
+    nonce = os.urandom(12)
+    ciphertext = aesgcm.encrypt(nonce, file_data, None)
+    return nonce + ciphertext
+
+def decrypt_verification_image(encrypted_data):
+    """Decrypt image data using AES-256-GCM."""
+    key = get_aes_key()
+    aesgcm = AESGCM(key)
+    nonce = encrypted_data[:12]
+    ciphertext = encrypted_data[12:]
+    return aesgcm.decrypt(nonce, ciphertext, None)
 
 def haversine_distance_km(lat1, lng1, lat2, lng2):
     R = 6371

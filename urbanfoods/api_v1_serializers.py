@@ -164,11 +164,11 @@ class StoreSerializer(serializers.ModelSerializer):
             'distance', 'bank_name', 'bank_account_name', 'bank_account_number',
             'phone', 'email', 'address_string',
             'opening_time', 'closing_time', 'is_open', 'plan', 'plan_price',
-            'subscription_expires', 'billing_status',
+            'subscription_expires', 'subscription_active', 'billing_status',
             'mpesa_shortcode', 'mpesa_consumer_key', 'mpesa_consumer_secret',
             'mpesa_passkey', 'mpesa_callback_url'
         ]
-        read_only_fields = ['owner', 'rating', 'rating_count']
+        read_only_fields = ['owner', 'rating', 'rating_count', 'is_pro', 'plan', 'plan_price', 'subscription_expires', 'billing_status']
 
     def get_dynamic_delivery_fee(self, obj):
         request = self.context.get('request')
@@ -401,6 +401,15 @@ class OrderSerializer(serializers.ModelSerializer):
     store_latitude = serializers.DecimalField(source='store.latitude', max_digits=9, decimal_places=6, read_only=True)
     store_longitude = serializers.DecimalField(source='store.longitude', max_digits=9, decimal_places=6, read_only=True)
     
+    verification_image_url = serializers.SerializerMethodField()
+
+    def get_verification_image_url(self, obj):
+        if obj.verification_image:
+            from django.urls import reverse
+            # Use the name defined in api_v1_urls.py
+            return reverse('order_verification_image', args=[obj.order_number])
+        return None
+
     def validate_phone(self, value):
         """Clean and validate phone number for Kenya/Daraja."""
         if not value:
@@ -447,7 +456,7 @@ class OrderSerializer(serializers.ModelSerializer):
             'google_maps_link', 'created_at', 'items', 'delivery_fee', 'tip_amount',
             'store_name', 'store_latitude', 'store_longitude',
             'rider_latitude', 'rider_longitude',
-            'requires_rider_verification', 'rider_verified_at'
+            'requires_rider_verification', 'rider_verified_at', 'rider_verification_method', 'verification_image_url'
         ]
         read_only_fields = ['order_number', 'created_at']
 
