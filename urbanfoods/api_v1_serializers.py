@@ -134,10 +134,10 @@ class StoreSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Please enter a valid Kenyan phone number.")
 
         # Check for uniqueness against the normalized value
-        # excluding the current user
+        # excluding the current user (the owner of the store)
         user_qs = User.objects.filter(phone=normalized)
-        if self.instance:
-            user_qs = user_qs.exclude(pk=self.instance.pk)
+        if self.instance and hasattr(self.instance, 'owner'):
+            user_qs = user_qs.exclude(pk=self.instance.owner.pk)
         
         if user_qs.exists():
             raise serializers.ValidationError("This phone number is already registered to another user.")
@@ -215,9 +215,10 @@ class StoreSerializer(serializers.ModelSerializer):
         owner = instance.owner
         
         # Update owner fields
-        for attr, value in owner_data.items():
-            setattr(owner, attr, value)
-        owner.save()
+        if owner:
+            for attr, value in owner_data.items():
+                setattr(owner, attr, value)
+            owner.save()
         
         # Update store fields
         return super().update(instance, validated_data)

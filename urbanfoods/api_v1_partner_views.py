@@ -411,10 +411,16 @@ class StoreSettingsView(PartnerBaseView, APIView):
         store = self.get_store(request)
         if not store:
             return Response({'error': 'No store associated'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Log request data for debugging
+        logger.info(f"PATCH Store Settings: {request.data}")
+            
         serializer = StoreSerializer(store, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
+        
+        logger.error(f"Store Settings Validation Errors: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class OrderInvoiceView(PartnerBaseView, APIView):
