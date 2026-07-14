@@ -65,6 +65,7 @@ INSTALLED_APPS = [
     'storages',
     'django.contrib.sites',  # Required for sitemaps
     'django.contrib.sitemaps',
+    'django_celery_beat',
     'urbanfoods',  # Your app name
     'rest_framework',  # For API endpoints
     'corsheaders',
