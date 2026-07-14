@@ -169,23 +169,37 @@ AWS_S3_FILE_OVERWRITE = False
 AWS_DEFAULT_ACL = None
 
 # Use Cloudflare R2 for media files in production
-if not DEBUG and os.environ.get('R2_ACCESS_KEY_ID'):
-    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+# Check for R2_ACCESS_KEY_ID to ensure we have credentials
+if os.environ.get('R2_ACCESS_KEY_ID'):
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+        },
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage" if not DEBUG else "django.contrib.staticfiles.storage.ManifestStaticFilesStorage",
+        },
+    }
+    
     # If using a public bucket URL (e.g. pub-xxxxx.r2.dev) or a custom domain
     if AWS_S3_CUSTOM_DOMAIN:
         MEDIA_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/"
     else:
-        # Fallback to a default format if you have one, or keep /media/ 
-        # but django-storages will return the full S3 URL in most cases
-        pass
+        # Fallback: construct the public R2 URL if bucket name and account ID are present
+        if AWS_STORAGE_BUCKET_NAME and os.environ.get('R2_ACCOUNT_ID'):
+            MEDIA_URL = f"https://{AWS_STORAGE_BUCKET_NAME}.{os.environ.get('R2_ACCOUNT_ID')}.r2.cloudflarestorage.com/"
+else:
+    # Local storage fallback
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage" if not DEBUG else "django.contrib.staticfiles.storage.ManifestStaticFilesStorage",
+        },
+    }
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-# Static files storage with WhiteNoise
-if not DEBUG:
-    STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
-else:
-    STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
 
 # Session Configuration
 SESSION_COOKIE_AGE = 604800  # 1 week
