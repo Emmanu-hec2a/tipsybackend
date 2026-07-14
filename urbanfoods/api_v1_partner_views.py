@@ -174,6 +174,28 @@ class MenuItemViewSet(viewsets.ModelViewSet):
         
         serializer.save(store=self.request.user.store, category_fkey=category_fkey)
 
+    def create(self, request, *args, **kwargs):
+        # Log request data for debugging 400 errors
+        logger.info(f"POST Product Data: {request.data}")
+        
+        # Strip 'image' if it's a string (e.g. empty string or previous URL)
+        data = request.data.copy()
+        if 'image' in data and isinstance(data['image'], str):
+            del data['image']
+            
+        # Convert empty strings to None for numeric fields to avoid validation errors
+        numeric_fields = ['price', 'original_price', 'stock', 'low_stock_threshold', 'prep_time', 'discount_percent']
+        for field in numeric_fields:
+            if field in data and data[field] == '':
+                data[field] = None
+            
+        serializer = self.get_serializer(data=data)
+        if not serializer.is_valid():
+            logger.error(f"Validation Errors (POST): {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        self.perform_create(serializer)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
     def perform_update(self, serializer):
         category_name = self.request.data.get('category_name')
         if category_name:
@@ -191,6 +213,12 @@ class MenuItemViewSet(viewsets.ModelViewSet):
         data = request.data.copy()
         if 'image' in data and isinstance(data['image'], str):
             del data['image']
+            
+        # Convert empty strings to None for numeric fields
+        numeric_fields = ['price', 'original_price', 'stock', 'low_stock_threshold', 'prep_time', 'discount_percent']
+        for field in numeric_fields:
+            if field in data and data[field] == '':
+                data[field] = None
             
         partial = kwargs.pop('partial', False)
         instance = self.get_object()

@@ -184,7 +184,7 @@ class FoodItem(models.Model):
     
     store = models.ForeignKey(Store, on_delete=models.CASCADE, null=True, blank=True) # Nullable for migration
     name = models.CharField(max_length=100)
-    description = models.TextField()
+    description = models.TextField(blank=True, null=True)
     category_fkey = models.ForeignKey(FoodCategory, on_delete=models.CASCADE, related_name='items', null=True, blank=True)
     
     # New category choices as requested

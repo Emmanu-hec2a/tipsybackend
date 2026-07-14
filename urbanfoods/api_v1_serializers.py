@@ -267,43 +267,6 @@ class FoodCategorySerializer(serializers.ModelSerializer):
 
 class FoodItemSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category_fkey.name', read_only=True)
-    def validate_phone(self, value):
-        """Clean and validate phone number for Kenya/Daraja."""
-        if not value:
-            return value
-        
-        # Remove any non-digits
-        digits = ''.join(c for c in str(value) if c.isdigit())
-        
-        if digits.startswith('0') and len(digits) == 10:
-            normalized = digits[1:] # Store as 9 digits (7XXXXXXXX)
-        elif digits.startswith('254') and len(digits) == 12:
-            normalized = digits[3:] # Store as 9 digits (7XXXXXXXX)
-        elif len(digits) == 9:
-            normalized = digits
-        else:
-            raise serializers.ValidationError("Please enter a valid Kenyan phone number.")
-
-        # Check for uniqueness against the normalized value
-        # excluding the current user
-        user_qs = User.objects.filter(phone=normalized)
-        if self.instance:
-            user_qs = user_qs.exclude(pk=self.instance.pk)
-        
-        if user_qs.exists():
-            raise serializers.ValidationError("This phone number is already registered to another user.")
-            
-        return normalized
-
-    def update(self, instance, validated_data):
-        # Sync the main 'phone' field to the legacy 'phone_number' field for safety
-        phone = validated_data.get('phone')
-        if phone:
-            # Always ensure legacy field has a zero-prefixed or clean version if needed
-            # but M-Pesa utils handle the conversion.
-            instance.phone_number = '0' + phone if not phone.startswith('0') else phone
-            
-        return super().update(instance, validated_data)
 
     class Meta:
         model = FoodItem
@@ -317,43 +280,6 @@ class FoodItemSerializer(serializers.ModelSerializer):
 
 class OrderItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='food_item.name', read_only=True)
-    def validate_phone(self, value):
-        """Clean and validate phone number for Kenya/Daraja."""
-        if not value:
-            return value
-        
-        # Remove any non-digits
-        digits = ''.join(c for c in str(value) if c.isdigit())
-        
-        if digits.startswith('0') and len(digits) == 10:
-            normalized = digits[1:] # Store as 9 digits (7XXXXXXXX)
-        elif digits.startswith('254') and len(digits) == 12:
-            normalized = digits[3:] # Store as 9 digits (7XXXXXXXX)
-        elif len(digits) == 9:
-            normalized = digits
-        else:
-            raise serializers.ValidationError("Please enter a valid Kenyan phone number.")
-
-        # Check for uniqueness against the normalized value
-        # excluding the current user
-        user_qs = User.objects.filter(phone=normalized)
-        if self.instance:
-            user_qs = user_qs.exclude(pk=self.instance.pk)
-        
-        if user_qs.exists():
-            raise serializers.ValidationError("This phone number is already registered to another user.")
-            
-        return normalized
-
-    def update(self, instance, validated_data):
-        # Sync the main 'phone' field to the legacy 'phone_number' field for safety
-        phone = validated_data.get('phone')
-        if phone:
-            # Always ensure legacy field has a zero-prefixed or clean version if needed
-            # but M-Pesa utils handle the conversion.
-            instance.phone_number = '0' + phone if not phone.startswith('0') else phone
-            
-        return super().update(instance, validated_data)
 
     class Meta:
         model = OrderItem
