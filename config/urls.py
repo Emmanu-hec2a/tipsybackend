@@ -150,7 +150,7 @@ urlpatterns = [
     path('orders/<str:order_number>/rate/', views.rate_order, name='rate_order'),
 
     # Favicon
-    path('favicon.ico', RedirectView.as_view(url=static_url('images/favicon.png'), permanent=True)),
+    path('favicon.ico', RedirectView.as_view(url='/static/images/favicon.png', permanent=True)),
 
     #Service Worker & Manifest serving
     path('service-worker.js', serve, {
