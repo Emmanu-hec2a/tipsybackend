@@ -39,6 +39,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://www.tipsytheoryy.com",
     "https://*.railway.app",
     "https://tipsybackend.up.railway.app",
+    "https://tipsytheoryy-merchant.pages.dev",
 ]
 
 # SECURE_SSL_REDIRECT = True
@@ -59,10 +60,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'cloudinary_storage',  # Add before django.contrib.staticfiles
+    'storages',
     'django.contrib.sites',  # Required for sitemaps
     'django.contrib.sitemaps',
-    'cloudinary',
     'urbanfoods',  # Your app name
     'rest_framework',  # For API endpoints
     'corsheaders',
@@ -155,16 +155,26 @@ STATICFILES_DIRS = [BASE_DIR / 'static']
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-# Cloudinary Configuration for media storage
-CLOUDINARY_STORAGE = {
-    'CLOUD_NAME': os.environ.get('CLOUDINARY_CLOUD_NAME'),
-    'API_KEY': os.environ.get('CLOUDINARY_API_KEY'),
-    'API_SECRET': os.environ.get('CLOUDINARY_API_SECRET'),
-}
+# Cloudflare R2 Configuration
+AWS_ACCESS_KEY_ID = os.environ.get('R2_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.environ.get('R2_SECRET_ACCESS_KEY')
+AWS_STORAGE_BUCKET_NAME = os.environ.get('R2_BUCKET_NAME')
+AWS_S3_ENDPOINT_URL = f"https://{os.environ.get('R2_ACCOUNT_ID')}.r2.cloudflarestorage.com"
+AWS_S3_CUSTOM_DOMAIN = os.environ.get('R2_CUSTOM_DOMAIN') # e.g. media.tipsytheoryy.com
+AWS_S3_REGION_NAME = 'auto'
+AWS_S3_FILE_OVERWRITE = False
+AWS_DEFAULT_ACL = None
 
-# Use Cloudinary for media files in production
-if not DEBUG:
-    DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
+# Use Cloudflare R2 for media files in production
+if not DEBUG and os.environ.get('R2_ACCESS_KEY_ID'):
+    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+    # If using a public bucket URL (e.g. pub-xxxxx.r2.dev) or a custom domain
+    if AWS_S3_CUSTOM_DOMAIN:
+        MEDIA_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/"
+    else:
+        # Fallback to a default format if you have one, or keep /media/ 
+        # but django-storages will return the full S3 URL in most cases
+        pass
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -294,6 +304,7 @@ LOGIN_URL = 'login'
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://tipsytheoryy-merchant.pages.dev",
 ]
 
 # MPESA Configuration
