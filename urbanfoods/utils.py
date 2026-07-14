@@ -113,17 +113,32 @@ def format_phone(phone):
 
 import firebase_admin
 from firebase_admin import credentials, messaging
+import json
 
 # Initialize Firebase Admin
 try:
     if not firebase_admin._apps:
-        # User needs to place serviceAccountKey.json in the project root
-        cred_path = os.path.join(settings.BASE_DIR, 'tipsytheoryy-dfe92-firebase-adminsdk-fbsvc-499b77e717.json')
-        if os.path.exists(cred_path):
-            cred = credentials.Certificate(cred_path)
-            firebase_admin.initialize_app(cred)
-        else:
-            logger.warning(f"Firebase credentials not found at {cred_path}")
+        # 1. Try environment variable (JSON string) for production/Railway
+        service_account_json = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
+        
+        if service_account_json:
+            try:
+                cert_dict = json.loads(service_account_json)
+                cred = credentials.Certificate(cert_dict)
+                firebase_admin.initialize_app(cred)
+                logger.info("Firebase Admin initialized via environment variable")
+            except Exception as e:
+                logger.error(f"Failed to initialize Firebase via env var: {e}")
+        
+        # 2. Fallback to file for local development
+        if not firebase_admin._apps:
+            cred_path = os.path.join(settings.BASE_DIR, 'tipsytheoryy-dfe92-firebase-adminsdk-fbsvc-499b77e717.json')
+            if os.path.exists(cred_path):
+                cred = credentials.Certificate(cred_path)
+                firebase_admin.initialize_app(cred)
+                logger.info("Firebase Admin initialized via local JSON file")
+            else:
+                logger.warning(f"Firebase credentials not found at {cred_path} or FIREBASE_SERVICE_ACCOUNT_JSON env var")
 except Exception as e:
     logger.error(f"Firebase Admin initialization failed: {e}")
 

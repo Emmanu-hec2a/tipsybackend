@@ -54,7 +54,7 @@ Payment Status: {order.payment_status.upper()}
 Estimated Delivery: {order.estimated_delivery.strftime('%I:%M %p')}
 
 View order details at:
-https://tipsytheoryy.com/admin-panel/orders/
+{settings.SITE_URL}/admin-panel/orders/
 
 ---
 TipsyTheoryy Admin System
@@ -271,7 +271,7 @@ TipsyTheoryy Admin System
                     </table>
 
                     <div style="text-align: center; margin: 40px 0;">
-                        <a href="https://tipsytheoryy.com/admin-panel/orders/" class="modern-btn">
+                        <a href="{settings.SITE_URL}/admin-panel/orders/" class="modern-btn">
                             📊 View All Orders →
                         </a>
                     </div>
@@ -636,7 +636,7 @@ Tipsy Theoryy
                     {payment_html}
 
                     <div style="text-align: center; margin: 40px 0;">
-                        <a href="https://tipsytheoryy.com/orders/" class="modern-btn">
+                        <a href="{settings.SITE_URL}/orders/" class="modern-btn">
                             📍 Track Your Order →
                         </a>
                     </div>

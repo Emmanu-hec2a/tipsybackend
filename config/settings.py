@@ -38,6 +38,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://tipsytheoryy.com",
     "https://www.tipsytheoryy.com",
     "https://*.railway.app",
+    "https://tipsybackend.up.railway.app",
 ]
 
 # SECURE_SSL_REDIRECT = True
