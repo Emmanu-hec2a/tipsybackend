@@ -97,6 +97,17 @@ class CustomerStoreListView(generics.ListAPIView):
                 ).order_by('-is_pro', 'distance')
             except ValueError:
                 pass
+        
+        # 🛡️ Limit for Home Screen / Popular List to prevent 1000+ items load
+        limit = self.request.query_params.get('limit')
+        if limit:
+            try:
+                queryset = queryset[:int(limit)]
+            except ValueError:
+                queryset = queryset[:20]
+        else:
+            # Default safety limit for generic listing
+            queryset = queryset[:50]
                 
         return queryset
 

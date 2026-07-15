@@ -57,8 +57,8 @@ class User(AbstractUser):
 class Store(models.Model):
     owner = models.OneToOneField(User, on_delete=models.CASCADE, related_name='store')
     name = models.CharField(max_length=200)
-    is_active = models.BooleanField(default=False)
-    is_pro = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=False, db_index=True)
+    is_pro = models.BooleanField(default=False, db_index=True)
     
     # Operational fields
     opening_time = models.TimeField(null=True, blank=True)
@@ -88,7 +88,7 @@ class Store(models.Model):
     rating = models.DecimalField(max_digits=2, decimal_places=1, default=0.0)
     rating_count = models.IntegerField(default=0)
     avg_delivery_minutes = models.IntegerField(default=30)
-    is_open = models.BooleanField(default=True)
+    is_open = models.BooleanField(default=True, db_index=True)
     opens_at = models.TimeField(null=True, blank=True)
     closes_at = models.TimeField(null=True, blank=True)
 
@@ -194,7 +194,7 @@ class FoodItem(models.Model):
     ]
     category = models.CharField(max_length=30, choices=CATEGORY_CHOICES, null=True, blank=True)
     sku = models.CharField(max_length=50, unique=True, null=True, blank=True)
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True, db_index=True)
     discount_percent = models.IntegerField(default=0)
     original_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
@@ -203,9 +203,9 @@ class FoodItem(models.Model):
     low_stock_threshold = models.PositiveIntegerField(default=2, help_text="Alert when stock goes below this number")
     image = models.ImageField(upload_to='food_images/')
     prep_time = models.IntegerField(help_text="Preparation time in minutes", default=15)
-    is_available = models.BooleanField(default=True)
-    is_new_arrival = models.BooleanField(default=False)
-    is_featured = models.BooleanField(default=False)
+    is_available = models.BooleanField(default=True, db_index=True)
+    is_new_arrival = models.BooleanField(default=False, db_index=True)
+    is_featured = models.BooleanField(default=False, db_index=True)
     is_meal_of_day = models.BooleanField(default=False)
     times_ordered = models.IntegerField(default=0)  # for popularity tracking
     store_type = models.CharField(max_length=10, choices=STORE_CHOICES, default='liquor')
@@ -348,11 +348,11 @@ class Order(models.Model):
     rider_verification_method = models.CharField(max_length=50, null=True, blank=True)
     verification_image = models.FileField(upload_to='verifications/', null=True, blank=True)
 
-    order_number = models.CharField(max_length=20, unique=True, editable=False)
+    order_number = models.CharField(max_length=20, unique=True, editable=False, db_index=True)
     is_test_order = models.BooleanField(default=False)
     has_reviewed_items = models.BooleanField(default=False)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders')
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders', db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
     
     # Delivery information
     hostel = models.CharField(max_length=100, null=True, blank=True)
@@ -388,8 +388,8 @@ class Order(models.Model):
     ], default='liquor')
 
     # MPESA specific fields
-    mpesa_checkout_request_id = models.CharField(max_length=50, blank=True, null=True)
-    mpesa_receipt_number = models.CharField(max_length=20, blank=True, null=True)
+    mpesa_checkout_request_id = models.CharField(max_length=50, blank=True, null=True, db_index=True)
+    mpesa_receipt_number = models.CharField(max_length=20, blank=True, null=True, db_index=True)
     mpesa_transaction_date = models.CharField(max_length=20, blank=True, null=True)
 
     # Additional fields

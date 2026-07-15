@@ -52,6 +52,7 @@ customer_patterns = [
 auth_patterns = [
     path('fcm-token/', views.SaveFCMTokenView.as_view(), name='save_fcm_token'),
     path('login/', api_v1_auth_views.UnifiedLoginView.as_view(), name='unified_login_api'),
+    path('social-login/', api_v1_auth_views.FirebaseSocialLoginView.as_view(), name='firebase_social_login'),
     path('partner/login/', views.PartnerLoginView.as_view(), name='partner_login_api'),
     path('partner/signup/', views.PartnerSignupView.as_view(), name='partner_signup_api'),
     path('rider/login/', views.RiderLoginView.as_view(), name='rider_login_api'),
