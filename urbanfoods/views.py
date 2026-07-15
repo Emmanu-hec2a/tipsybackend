@@ -23,10 +23,12 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, authentication
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework_simplejwt.tokens import RefreshToken
 from .permissions import IsCustomer, IsPartner, IsRider, IsSuperAdmin, QueryParamJWTAuthentication
 from rest_framework.decorators import api_view
 import requests
+import os
 
 # ==================== HOMEPAGE & FOOD CATALOG ====================
 
@@ -1546,3 +1548,71 @@ class TempVoiceUploadView(APIView):
         public_url = default_storage.url(saved_path)
         
         return Response({'url': public_url})
+
+class SecureTranscriptionView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        file_obj = request.FILES.get('file')
+        if not file_obj:
+            return Response({'error': 'No file provided'}, status=400)
+
+        # 1. Save to R2 to get a public URL for Netmind
+        from django.core.files.storage import default_storage
+        from django.utils.crypto import get_random_string
+        
+        ext = file_obj.name.split('.')[-1] if '.' in file_obj.name else 'm4a'
+        file_name = f"temp_voice/{get_random_string(12)}.{ext}"
+        saved_path = default_storage.save(file_name, file_obj)
+        audio_url = default_storage.url(saved_path)
+
+        # 2. Netmind Orchestration
+        netmind_key = os.environ.get('NETMIND_API_KEY')
+        if not netmind_key:
+            return Response({'error': 'Transcription service not configured'}, status=500)
+
+        try:
+            # Initiate
+            headers = {"Authorization": f"Bearer {netmind_key}", "Content-Type": "application/json"}
+            init_resp = requests.post(
+                "https://api.netmind.ai/v1/generation",
+                headers=headers,
+                json={
+                    "model": "openai/whisper",
+                    "config": {
+                        "audio_url": audio_url,
+                        "task": "transcribe",
+                        "chunk_level": "segment",
+                        "version": "3",
+                        "batch_size": 64
+                    }
+                },
+                timeout=10
+            )
+            
+            gen_id = init_resp.json().get('generation_id')
+            if not gen_id:
+                return Response({'error': 'Failed to initiate transcription'}, status=status.HTTP_502_BAD_GATEWAY)
+
+            # 3. Polling
+            import time
+            attempts = 0
+            while attempts < 30:
+                poll_resp = requests.get(f"https://api.netmind.ai/v1/generation/{gen_id}", headers=headers, timeout=10)
+                data = poll_resp.json()
+                
+                if data.get('status') in ['completed', 'success']:
+                    results = data.get('results', [])
+                    text = " ".join([s['text'] for s in results]) if isinstance(results, list) else data.get('text', '')
+                    return Response({'text': text})
+                elif data.get('status') == 'failed':
+                    return Response({'error': 'Transcription failed'}, status=502)
+                
+                time.sleep(1)
+                attempts += 1
+            
+            return Response({'error': 'Transcription timed out'}, status=504)
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)

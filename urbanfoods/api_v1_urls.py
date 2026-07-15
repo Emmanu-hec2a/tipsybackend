@@ -96,4 +96,5 @@ urlpatterns = [
     path('orders/<str:order_number>/verification-image/', views.OrderVerificationImageView.as_view(), name='order_verification_image'),
     path('ai/chat/', views.TheoryAIChatView.as_view(), name='ai_chat'),
     path('ai/voice-upload/', views.TempVoiceUploadView.as_view(), name='ai_voice_upload'),
+    path('ai/transcribe/', views.SecureTranscriptionView.as_view(), name='ai_transcribe'),
 ]
