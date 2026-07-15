@@ -1591,9 +1591,14 @@ class SecureTranscriptionView(APIView):
                 timeout=10
             )
             
-            gen_id = init_resp.json().get('generation_id')
+            init_data = init_resp.json()
+            gen_id = init_data.get('generation_id')
             if not gen_id:
-                return Response({'error': 'Failed to initiate transcription'}, status=status.HTTP_502_BAD_GATEWAY)
+                logger.error(f"Netmind Initiation Error: {init_data}")
+                return Response({
+                    'error': 'Failed to initiate transcription',
+                    'details': init_data.get('message', 'No details from service')
+                }, status=status.HTTP_502_BAD_GATEWAY)
 
             # 3. Polling
             import time
@@ -1613,6 +1618,48 @@ class SecureTranscriptionView(APIView):
                 attempts += 1
             
             return Response({'error': 'Transcription timed out'}, status=504)
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
+class SecureTTSView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        text = request.data.get('text')
+        if not text:
+            return Response({'error': 'Text required'}, status=400)
+
+        openai_key = os.environ.get('OPENAI_API_KEY')
+        if not openai_key:
+            return Response({'error': 'TTS service not configured'}, status=500)
+
+        try:
+            # 1. Call OpenAI TTS
+            resp = requests.post(
+                "https://api.openai.com/v1/audio/speech",
+                headers={"Authorization": f"Bearer {openai_key}"},
+                json={
+                    "model": "tts-1",
+                    "input": text,
+                    "voice": "onyx"
+                },
+                timeout=30
+            )
+
+            if resp.status_code != 200:
+                return Response({'error': 'OpenAI TTS failed'}, status=resp.status_code)
+
+            # 2. Save to R2
+            from django.core.files.storage import default_storage
+            from django.core.files.base import ContentFile
+            from django.utils.crypto import get_random_string
+            
+            file_name = f"tts/{get_random_string(12)}.mp3"
+            saved_path = default_storage.save(file_name, ContentFile(resp.content))
+            audio_url = default_storage.url(saved_path)
+
+            return Response({'url': audio_url})
 
         except Exception as e:
             return Response({'error': str(e)}, status=500)

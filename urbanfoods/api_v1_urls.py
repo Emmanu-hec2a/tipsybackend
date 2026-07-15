@@ -97,4 +97,5 @@ urlpatterns = [
     path('ai/chat/', views.TheoryAIChatView.as_view(), name='ai_chat'),
     path('ai/voice-upload/', views.TempVoiceUploadView.as_view(), name='ai_voice_upload'),
     path('ai/transcribe/', views.SecureTranscriptionView.as_view(), name='ai_transcribe'),
+    path('ai/speak/', views.SecureTTSView.as_view(), name='ai_speak'),
 ]
