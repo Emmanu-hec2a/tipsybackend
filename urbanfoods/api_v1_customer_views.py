@@ -295,6 +295,20 @@ class CustomerPlaceOrderView(APIView):
                 if not store:
                     return Response({'error': 'Store not found for items'}, status=status.HTTP_400_BAD_REQUEST)
 
+                # 🛡️ Distance Radius Enforcement
+                u_lat = data.get('latitude')
+                u_lng = data.get('longitude')
+                if u_lat and u_lng and store.latitude and store.longitude:
+                    from .utils import haversine_distance_km
+                    dist = haversine_distance_km(u_lat, u_lng, store.latitude, store.longitude)
+                    if dist > store.delivery_radius_km:
+                        return Response({
+                            'error': 'out_of_radius',
+                            'message': f'This store only delivers within {store.delivery_radius_km}KM. You are approximately {dist:.1f}KM away.',
+                            'distance': dist,
+                            'radius': store.delivery_radius_km
+                        }, status=status.HTTP_400_BAD_REQUEST)
+
                 # Calculate totals and validate single store
                 subtotal = 0
                 order_items_to_create = []

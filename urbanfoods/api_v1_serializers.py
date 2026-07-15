@@ -158,7 +158,7 @@ class StoreSerializer(serializers.ModelSerializer):
         model = Store
         fields = [
             'id', 'name', 'shop_name', 'logo', 'cover_image', 'tagline', 'primary_color',
-            'rating', 'rating_count', 'delivery_fee', 'dynamic_delivery_fee',
+            'rating', 'rating_count', 'delivery_fee', 'dynamic_delivery_fee', 'delivery_radius_km',
             'base_delivery_fee', 'base_distance_km', 'extra_distance_surcharge',
             'avg_delivery_minutes', 'latitude', 'longitude', 'is_pro', 'is_favourite', 
             'distance', 'bank_name', 'bank_account_name', 'bank_account_number',
@@ -275,7 +275,7 @@ class FoodItemSerializer(serializers.ModelSerializer):
             'id', 'name', 'description', 'category', 'category_fkey', 'category_name',
             'sku', 'price', 'original_price', 'discount_percent', 'stock',
             'low_stock_threshold', 'image', 'prep_time', 'is_available', 'is_active',
-            'store_type', 'bottle_size', 'store', 'is_new_arrival'
+            'store_type', 'bottle_size', 'store', 'is_new_arrival', 'is_featured'
         ]
         read_only_fields = ['store']
 

@@ -1402,26 +1402,147 @@ class TheoryAIChatView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        user_message = request.data.get('message', '')
+        user_message = request.data.get('message', '').lower()
+        lat = request.data.get('lat')
+        lng = request.data.get('lng')
+
         if not user_message:
             return Response({'error': 'Message required'}, status=400)
 
-        # 🧠 THE THEORY AI CORE LOGIC
-        # 1. We would ideally hit GPT-4o here
-        # 2. We'd inject local inventory data
-        # 3. For V1 production, we provide a sophisticated mock-up or direct GPT bridge
+        # 1. Intent Detection
+        intent = 'conversation'
+        action = None
+        action_data = {}
+
+        # Basic Intent Mapping
+        if any(kw in user_message for kw in ['checkout', 'pay', 'done', 'buy now']):
+            intent = 'checkout'
+            action = 'NAVIGATE'
+            action_data = {'screen': '/checkout'}
+            response_text = "Sure thing. Heading to checkout now."
         
-        # Example dynamic response logic (Simulating "The Lounge Host")
-        response_text = f"I've analyzed your request for '{user_message}'. "
-        
-        if 'party' in user_message.lower() or 'friends' in user_message.lower():
-            response_text += "For a gathering, I recommend a chilled bottle of Tanqueray Gin paired with premium Tonics. I've found a merchant nearby who can have it to you in 18 minutes."
-        elif 'emergency' in user_message.lower() or 'out of' in user_message.lower():
-            response_text += "Don't worry, I'm prioritizing your search for mixers and ice. I've pinned the closest open store for you."
+        elif any(kw in user_message for kw in ['cart', 'basket']):
+            intent = 'view_cart'
+            action = 'NAVIGATE'
+            action_data = {'screen': '/cart'}
+            response_text = "Of course. Opening your cart."
+
+        elif any(kw in user_message for kw in ['add', 'get me', 'want to buy']):
+            intent = 'add_to_cart'
+            search_query = user_message.replace('add', '').replace('get me', '').replace('to my cart', '').strip()
+            
+            product = self._search_best_match(search_query, lat, lng)
+            if product:
+                action = 'ADD_TO_CART'
+                action_data = {
+                    'product_id': product.id,
+                    'name': product.name,
+                    'price': float(product.price),
+                    'store_id': product.store.id,
+                    'store_name': product.store.name,
+                    'delivery_fee': float(product.store.delivery_fee)
+                }
+                response_text = f"Done. Added {product.name} to your cart. Anything else?"
+            else:
+                response_text = "Sorry, I couldn't find that one. Try another brand?"
+
         else:
-            response_text += "Based on your preference for premium spirits, might I suggest a Single Malt? The Macallan 12 is currently in stock at 'Liquor House Westlands'."
+            # Default to Search/Recommendation
+            intent = 'search'
+            products = self._search_nearby_products(user_message, lat, lng)
+            
+            if products:
+                action = 'SEARCH_RESULTS'
+                action_data = {'query': user_message}
+                top_p = products[0]
+                response_text = f"Found it! {top_p.name} from {top_p.store.name} is available. Check the list."
+            else:
+                if 'party' in user_message or 'friends' in user_message:
+                    response_text = "For a crowd, I'd suggest some Gin and tonics. I've found a few options nearby."
+                elif 'emergency' in user_message or 'out of' in user_message:
+                    response_text = "On it. Here's the closest open store for mixers and ice."
+                else:
+                    response_text = "Welcome to the Theory. What can I get for you tonight?"
 
         return Response({
             'text': response_text,
-            'action': 'search_recommendation'
+            'intent': intent,
+            'action': action,
+            'action_data': action_data
         })
+
+    def _search_best_match(self, query, lat, lng):
+        products = self._search_nearby_products(query, lat, lng)
+        return products[0] if products else None
+
+    def _search_nearby_products(self, query, lat, lng):
+        from .models import FoodItem, Store
+        
+        today = timezone.now().date()
+        
+        # Base filter: active items from active stores with valid subscriptions
+        queryset = FoodItem.objects.filter(
+            is_active=True,
+            store__is_active=True,
+            store__subscription_expires__gte=today,
+            store__billing_status='active'
+        ).select_related('store')
+
+        if query:
+            queryset = queryset.filter(
+                Q(name__icontains=query) | 
+                Q(description__icontains=query) |
+                Q(category_fkey__name__icontains=query)
+            )
+
+        # 🛡️ Radius Enforcement in AI Search
+        if lat and lng:
+            try:
+                u_lat = float(lat)
+                u_lng = float(lng)
+                from .utils import haversine_distance_km
+                
+                # Fetch candidate products first (limited set to avoid heavy distance calc on all)
+                candidates = list(queryset[:50])
+                filtered = []
+                for p in candidates:
+                    if p.store.latitude and p.store.longitude:
+                        dist = haversine_distance_km(u_lat, u_lng, p.store.latitude, p.store.longitude)
+                        if dist <= p.store.delivery_radius_km:
+                            p.ai_distance = dist # Temporarily attach distance
+                            filtered.append(p)
+                    else:
+                        filtered.append(p) # If store has no coords, keep it? or skip?
+                
+                # Sort by Pro then distance
+                filtered.sort(key=lambda x: (-x.store.is_pro, getattr(x, 'ai_distance', 999)))
+                return filtered[:5]
+            except Exception:
+                pass
+
+        # Pro stores and name priority fallback
+        queryset = queryset.order_by('-store__is_pro', 'name')
+        return queryset[:5]
+
+class TempVoiceUploadView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        file_obj = request.FILES.get('file')
+        if not file_obj:
+            return Response({'error': 'No file provided'}, status=400)
+
+        # 🛡️ Save to R2 (Cloudflare) or local media
+        # Since 'django-storages' is likely configured for R2/S3
+        from django.core.files.storage import default_storage
+        from django.utils.crypto import get_random_string
+        
+        # Generate a unique filename with .m4a extension
+        ext = file_obj.name.split('.')[-1] if '.' in file_obj.name else 'm4a'
+        file_name = f"temp_voice/{get_random_string(12)}.{ext}"
+        
+        saved_path = default_storage.save(file_name, file_obj)
+        public_url = default_storage.url(saved_path)
+        
+        return Response({'url': public_url})
