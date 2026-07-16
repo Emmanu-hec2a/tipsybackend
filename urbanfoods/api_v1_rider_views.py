@@ -192,10 +192,14 @@ class RiderOrderQueueView(APIView):
     permission_classes = [IsRider]
     
     def get(self, request):
-        # Available orders: assigned to nobody and store is active
-        # Or specifically assigned to this rider but pending pickup
+        # 🛡️ Strict Isolation: Rider can ONLY see orders from their assigned store
+        if not request.user.assigned_store:
+            return Response({'error': 'No store assigned to this rider'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Available orders: assigned to nobody and status is pending, but ONLY for their store
+        # Or specifically assigned to this rider for active delivery
         queryset = Order.objects.filter(
-            Q(assigned_rider__isnull=True, status='pending') | 
+            Q(assigned_rider__isnull=True, status='pending', store=request.user.assigned_store) | 
             Q(assigned_rider=request.user, status__in=['assigned', 'picked_up', 'arrived'])
         ).order_by('-created_at')
         
@@ -219,10 +223,19 @@ class RiderAcceptOrderView(APIView):
     permission_classes = [IsRider]
 
     def post(self, request, order_id):
+        if not request.user.assigned_store:
+            return Response({'error': 'No store assigned to this rider'}, status=status.HTTP_403_FORBIDDEN)
+
         try:
-            order = Order.objects.get(id=order_id, assigned_rider__isnull=True, status='pending')
+            # 🛡️ Strict Isolation: Only allow accepting if the order belongs to the rider's assigned store
+            order = Order.objects.get(
+                id=order_id, 
+                assigned_rider__isnull=True, 
+                status='pending',
+                store=request.user.assigned_store
+            )
         except Order.DoesNotExist:
-            return Response({'error': 'Order not available or already taken'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Order not available or belongs to another store'}, status=status.HTTP_404_NOT_FOUND)
 
         order.assigned_rider = request.user
         order.status = 'assigned'
