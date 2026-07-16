@@ -92,7 +92,10 @@ class PayNowView(APIView):
         new_plan = request.data.get('plan') # 'base', 'pro', or 'custom'
         
         try:
-            store = user.store
+            # Safely check for store
+            store = getattr(user, 'store', None)
+            if not store:
+                return Response({'error': 'No store associated with this account. Please create a store first.'}, status=status.HTTP_400_BAD_REQUEST)
             
             # If a new plan is requested, update the store's plan and price temporarily
             # but don't mark it as active yet. The callback will handle the activation.

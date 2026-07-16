@@ -1036,8 +1036,15 @@ def mpesa_callback(request):
             return HttpResponse("OK")
 
         # ── Validate amount ──
-        if Decimal(str(amount)) != order.total:
-            _fail_payment(order, reason=f'Amount mismatch: got {amount}, expected {order.total}')
+        is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
+        received_amount = Decimal(str(amount))
+        
+        # In sandbox/test mode, we often pay 1.0. 
+        # In production, we expect the EXACT total.
+        is_valid_amount = (received_amount == order.total) or (not is_production and received_amount == Decimal('1.0'))
+
+        if not is_valid_amount:
+            _fail_payment(order, reason=f'Amount mismatch: received {amount} expected {order.total}')
             logger.error(
                 "Amount mismatch on order %s: received %s expected %s",
                 order.order_number, amount, order.total,
