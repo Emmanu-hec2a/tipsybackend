@@ -224,6 +224,51 @@ class CustomerOrderDetailView(generics.RetrieveAPIView):
     def get_queryset(self):
         return Order.objects.filter(user=self.request.user)
 
+class CustomerRetryPaymentView(APIView):
+    permission_classes = [IsCustomer]
+
+    def post(self, request):
+        order_number = request.data.get('order_number')
+        if not order_number:
+            return Response({'error': 'Order number required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            order = Order.objects.get(order_number=order_number, user=request.user)
+        except Order.DoesNotExist:
+            return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if order.payment_status == 'paid':
+            return Response({'error': 'Payment already completed'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .mpesa_utils import MpesaIntegration
+        mpesa = MpesaIntegration(store=order.store)
+        try:
+            # Format phone number for M-Pesa
+            phone = mpesa.format_phone_number(order.phone_number)
+            
+            # Use a small amount for testing if not production
+            is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
+            amount = int(order.total) if is_production else 1
+            
+            stk_result = mpesa.initiate_stk_push(
+                phone_number=phone,
+                amount=amount,
+                account_reference=f"ORD-{order.order_number}",
+                transaction_desc=f"Retry Payment {order.order_number}"
+            )
+            
+            if stk_result.get('success'):
+                order.mpesa_checkout_request_id = stk_result.get('checkout_request_id')
+                order.save(update_fields=['mpesa_checkout_request_id'])
+                return Response({
+                    'checkout_request_id': stk_result.get('checkout_request_id'),
+                    'message': 'M-Pesa STK push initiated successfully.'
+                })
+            else:
+                return Response({'error': stk_result.get('message')}, status=status.HTTP_502_BAD_GATEWAY)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 class CustomerRateOrderView(APIView):
     permission_classes = [IsCustomer]
 

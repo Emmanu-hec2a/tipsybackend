@@ -46,6 +46,7 @@ customer_patterns = [
     path('products/', api_v1_customer_views.CustomerProductListView.as_view(), name='customer_product_list'),
     path('orders/', api_v1_customer_views.CustomerOrderListView.as_view(), name='customer_order_list'),
     path('orders/create/', api_v1_customer_views.CustomerPlaceOrderView.as_view(), name='customer_place_order'),
+    path('orders/retry-payment/', api_v1_customer_views.CustomerRetryPaymentView.as_view(), name='customer_order_retry_payment'),
     path('orders/<int:pk>/', api_v1_customer_views.CustomerOrderDetailView.as_view(), name='customer_order_detail'),
     path('orders/<int:pk>/rate/', api_v1_customer_views.CustomerRateOrderView.as_view(), name='customer_rate_order'),
 ]
