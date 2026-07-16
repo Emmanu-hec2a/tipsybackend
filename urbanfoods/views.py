@@ -734,11 +734,14 @@ def _confirm_payment(order, receipt_number=None, notes='Payment confirmed'):
 
     OrderStatusHistory.objects.create(order=order, status='pending', notes=notes)
 
-    # Notifications
-    from .utils import notify_payment_received
-    notify_payment_received(order)
-    send_customer_order_confirmation(order)
-    send_admin_order_notification(order)
+    # Notifications (Wrapped in try-except to prevent crashing the payment flow)
+    try:
+        from .utils import notify_payment_received
+        notify_payment_received(order)
+        send_customer_order_confirmation(order)
+        send_admin_order_notification(order)
+    except Exception as e:
+        logger.error(f"Post-payment notifications failed for order {order.order_number}: {e}")
 
 
 def _fail_payment(order, reason=''):

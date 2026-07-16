@@ -5,6 +5,9 @@ from django.utils import timezone
 
 local_time = timezone.localtime(timezone.now())
 
+def safe_upper(val):
+    return str(val).upper() if val else 'N/A'
+
 def send_admin_order_notification(order):
     """Send email notification to admin when a new order is received"""
     subject = f'🔔 New Order: {order.order_number}'
@@ -22,8 +25,8 @@ New Order Received!
 Order Details:
 --------------
 Order Number: {order.order_number}
-Store Type: {order.store_type.upper()}
-Status: {order.status.upper()}
+Store Type: {safe_upper(order.store_type)}
+Status: {safe_upper(order.status)}
 
 Customer Information:
 --------------------
@@ -47,9 +50,9 @@ Total Amount: KES {order.total}
 
 Payment:
 --------
-Payment Method: {order.payment_method.upper()}
-Payment Type: {order.payment_type.upper()}
-Payment Status: {order.payment_status.upper()}
+Payment Method: {safe_upper(order.payment_method)}
+Payment Type: {safe_upper(order.payment_type)}
+Payment Status: {safe_upper(order.payment_status)}
 
 Estimated Delivery: {order.estimated_delivery.strftime('%I:%M %p')}
 
@@ -222,8 +225,8 @@ TipsyTheoryy Admin System
                     <div class="info-card">
                         <h2>Order #{order.order_number}</h2>
                         <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-                            <div><strong>Store:</strong> <span class="info">{order.store_type.upper()}</span></div>
-                            <div><strong>Status:</strong> <span class="highlight">{order.status.upper()}</span></div>
+                            <div><strong>Store:</strong> <span class="info">{safe_upper(order.store_type)}</span></div>
+                            <div><strong>Status:</strong> <span class="highlight">{safe_upper(order.status)}</span></div>
                         </div>
                     </div>
 
@@ -240,7 +243,7 @@ TipsyTheoryy Admin System
                         <div><strong>Room:</strong><br>{order.room_number}</div>
                         <div><strong>Notes:</strong><br>{order.delivery_notes or 'None'}</div>
                         <div><strong>ETA:</strong><br><span class="success">15 mins</span></div>
-                        <div><strong>Payment:</strong><br><span class="highlight">{order.payment_method.upper()}</span></div>
+                        <div><strong>Payment:</strong><br><span class="highlight">{safe_upper(order.payment_method)}</span></div>
                     </div>
 
                     <h3 class="section-header">🛒 Order Items</h3>
@@ -353,7 +356,7 @@ Order Details:
 Order Number: {order.order_number}
 Order Date: {timezone.localtime(order.created_at).strftime('%B %d, %Y at %I:%M %p')}
 
-Payment Method: {order.payment_method.upper()}
+Payment Method: {safe_upper(order.payment_method)}
 
 Delivery Information:
 --------------------
@@ -592,7 +595,7 @@ Tipsy Theoryy
                         <div style="display: flex; gap: 20px; flex-wrap: wrap;">
                             <div><strong>Date:</strong> <span class="info">{timezone.localtime(order.created_at).strftime('%B %d, %Y')}</span></div>
                             <div><strong>Time:</strong> <span class="info">{timezone.localtime(order.created_at).strftime('%I:%M %p')}</span></div>
-                            <div><strong>Status:</strong> <span class="highlight">{order.status.upper()}</span></div>
+                            <div><strong>Status:</strong> <span class="highlight">{safe_upper(order.status)}</span></div>
                         </div>
                     </div>
 
@@ -631,7 +634,7 @@ Tipsy Theoryy
                         </tbody>
                     </table>
 
-                    <div style="margin: 20px 0; color: #1f2937;"><strong>Payment Method:</strong> <span class="highlight">{order.payment_method.upper()}</span></div>
+                    <div style="margin: 20px 0; color: #1f2937;"><strong>Payment Method:</strong> <span class="highlight">{safe_upper(order.payment_method)}</span></div>
 
                     {payment_html}
 
