@@ -54,7 +54,7 @@ Payment Method: {safe_upper(order.payment_method)}
 Payment Type: {safe_upper(order.payment_type)}
 Payment Status: {safe_upper(order.payment_status)}
 
-Estimated Delivery: {order.estimated_delivery.strftime('%I:%M %p')}
+Estimated Delivery: {order.estimated_delivery.strftime('%I:%M %p') if order.estimated_delivery else '15-30 mins'}
 
 View order details at:
 {settings.SITE_URL}/admin-panel/orders/
