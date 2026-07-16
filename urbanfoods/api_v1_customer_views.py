@@ -243,8 +243,14 @@ class CustomerRetryPaymentView(APIView):
         from .mpesa_utils import MpesaIntegration
         mpesa = MpesaIntegration(store=order.store)
         try:
-            # Format phone number for M-Pesa
-            phone = mpesa.format_phone_number(order.phone_number)
+            # Use provided phone or fallback to order's existing phone
+            raw_phone = request.data.get('mpesa_phone') or order.phone_number
+            phone = mpesa.format_phone_number(raw_phone)
+            
+            # Update order phone if a new one was provided for this retry
+            if raw_phone and phone != order.phone_number:
+                order.phone_number = phone
+                order.save(update_fields=['phone_number'])
             
             # Use a small amount for testing if not production
             is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
@@ -425,7 +431,14 @@ class CustomerPlaceOrderView(APIView):
                 if order.payment_method == 'mpesa':
                     try:
                         mpesa = MpesaIntegration(store=order.store)
-                        phone = mpesa.format_phone_number(request.user.phone)
+                        
+                        # Use provided mpesa_phone or fallback to user.phone
+                        raw_phone = data.get('mpesa_phone') or request.user.phone
+                        phone = mpesa.format_phone_number(raw_phone)
+                        
+                        # Update order with the phone used for payment for callback verification
+                        order.phone_number = phone 
+                        order.save(update_fields=['phone_number'])
                         
                         # Use a small amount for testing if not production
                         is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
