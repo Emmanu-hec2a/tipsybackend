@@ -29,6 +29,7 @@ partner_patterns = [
     path('marketing/stats/', api_v1_partner_views.MarketingStatsView.as_view(), name='partner_marketing_stats'),
     path('settings/', api_v1_partner_views.StoreSettingsView.as_view(), name='partner_settings'),
     path('billing/pay-now/', api_v1_billing_views.PayNowView.as_view(), name='partner_billing_pay_now'),
+    path('payments/mpesa/initiate/', api_v1_billing_views.PayNowView.as_view(), name='partner_payments_mpesa_initiate'),
     path('billing/history/', api_v1_billing_views.SubscriptionHistoryView.as_view(), name='partner_billing_history'),
 ]
 

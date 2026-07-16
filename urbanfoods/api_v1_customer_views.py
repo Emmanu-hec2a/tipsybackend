@@ -15,6 +15,9 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 from django.db import transaction
 from .utils import calculate_risk_score
+import logging
+
+logger = logging.getLogger(__name__)
 
 class SavedAddressViewSet(generics.ListCreateAPIView):
     serializer_class = SavedAddressSerializer
@@ -46,6 +49,7 @@ class CustomerProfileView(APIView):
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
+        logger.warning(f"Profile Update Failed for {request.user.username}: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @method_decorator(cache_page(60*5), name='dispatch')
@@ -390,7 +394,7 @@ class CustomerPlaceOrderView(APIView):
                         )
                         
                         if stk_result.get('success'):
-                            order.checkout_request_id = stk_result.get('checkout_request_id')
+                            order.mpesa_checkout_request_id = stk_result.get('checkout_request_id')
                             order.save()
                             response_data['checkout_request_id'] = stk_result.get('checkout_request_id')
                             response_data['message'] = "M-Pesa STK push initiated successfully."
