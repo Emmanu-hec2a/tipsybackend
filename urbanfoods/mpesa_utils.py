@@ -90,26 +90,40 @@ class MpesaIntegration:
     def get_access_token(self):
         # Cache per-store if needed, but for now global cache with store prefix is safer
         cache_key = f'mpesa_token_{self.shortcode}' if self.shortcode else 'mpesa_access_token'
-        token = cache.get(cache_key)
-        if token:
-            return token
+        try:
+            token = cache.get(cache_key)
+            if token:
+                return token
+        except Exception as cache_err:
+            logger.warning(f"Cache access failed (Redis down?): {cache_err}")
 
         if not self.consumer_key or not self.consumer_secret:
-            logger.error(f"Missing M-Pesa credentials for store: {self.store}")
+            logger.error(f"Missing or invalid M-Pesa credentials for store: {self.store}")
             return None
 
         try:
+            logger.info(f"Fetching fresh M-Pesa token from Safaricom. Store={self.store}")
             response = requests.get(
                 self.access_token_url,
                 auth=(self.consumer_key, self.consumer_secret),
                 timeout=15
             )
-            response.raise_for_status()
+            
+            if response.status_code != 200:
+                logger.error(f"M-Pesa Auth Failed (Status {response.status_code}): {response.text}")
+                return None
+                
             data = response.json()
-
-            token = data['access_token']
-            cache.set(cache_key, token, timeout=3500)
-            return token
+            token = data.get('access_token')
+            if token:
+                try:
+                    cache.set(cache_key, token, timeout=3500)
+                except Exception:
+                    pass
+                return token
+            else:
+                logger.error(f"M-Pesa Auth Response missing access_token: {data}")
+                return None
         except Exception:
             logger.exception("Failed to obtain MPESA access token")
             return None

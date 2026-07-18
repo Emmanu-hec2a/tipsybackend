@@ -374,7 +374,10 @@ class ValidatePromotionView(APIView):
             return Response({'error': 'This promo code has reached its usage limit'}, status=400)
 
         if subtotal < float(promo.min_order_amount):
-            return Response({'error': f'Minimum order amount for this promo is KSh {promo.min_order_amount}'}, status=400)
+            diff = float(promo.min_order_amount) - subtotal
+            return Response({
+                'error': f'Minimum order amount for this promo is KSh {promo.min_order_amount}. Add KSh {int(diff)} more to unlock this offer.'
+            }, status=400)
 
         # Calculate discount
         discount = 0
@@ -535,41 +538,49 @@ class CustomerPlaceOrderView(APIView):
 
                 response_data = OrderSerializer(order).data
 
-                # Trigger M-Pesa STK Push if method is mpesa
-                if order.payment_method == 'mpesa':
-                    try:
-                        mpesa = MpesaIntegration(store=order.store)
-                        
-                        # Use provided mpesa_phone or fallback to user.phone
-                        raw_phone = data.get('mpesa_phone') or request.user.phone
-                        phone = mpesa.format_phone_number(raw_phone)
-                        
-                        # Update order with the phone used for payment for callback verification
-                        order.phone_number = phone 
-                        order.save(update_fields=['phone_number'])
-                        
-                        # Use a small amount for testing if not production
-                        is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
-                        amount = int(order.total) if is_production else 1
-                        
-                        stk_result = mpesa.initiate_stk_push(
-                            phone_number=phone,
-                            amount=amount,
-                            account_reference=f"ORD-{order.order_number}",
-                            transaction_desc=f"Payment for Order {order.order_number}"
-                        )
-                        
-                        if stk_result.get('success'):
-                            order.mpesa_checkout_request_id = stk_result.get('checkout_request_id')
-                            order.save()
-                            response_data['checkout_request_id'] = stk_result.get('checkout_request_id')
-                            response_data['message'] = "M-Pesa STK push initiated successfully."
-                        else:
-                            response_data['mpesa_error'] = stk_result.get('message')
-                    except Exception as mpesa_err:
-                        response_data['mpesa_error'] = str(mpesa_err)
+            # --- OUTSIDE TRANSACTION ---
+            # Trigger M-Pesa STK Push if method is mpesa
+            if order.payment_method == 'mpesa':
+                logger.info(f"Triggering STK Push for Order {order.order_number} (ID: {order.id})")
+                try:
+                    mpesa = MpesaIntegration(store=order.store)
+                    
+                    # Use provided mpesa_phone or fallback to user.phone
+                    raw_phone = data.get('mpesa_phone') or request.user.phone
+                    phone = mpesa.format_phone_number(raw_phone)
+                    
+                    # Update order with the phone used for payment
+                    order.phone_number = phone 
+                    order.save(update_fields=['phone_number'])
+                    
+                    # Use a small amount for testing if not production
+                    is_production = str(os.environ.get('MPESA_PRODUCTION', 'false')).lower() == 'true'
+                    amount = int(order.total) if is_production else 1
+                    
+                    logger.info(f"Initiating STK: Phone={phone}, Amount={amount}, Store={order.store.name}")
+                    
+                    stk_result = mpesa.initiate_stk_push(
+                        phone_number=phone,
+                        amount=amount,
+                        account_reference=f"ORD-{order.order_number}",
+                        transaction_desc=f"Payment for Order {order.order_number}"
+                    )
+                    
+                    if stk_result.get('success'):
+                        order.mpesa_checkout_request_id = stk_result.get('checkout_request_id')
+                        order.save(update_fields=['mpesa_checkout_request_id'])
+                        response_data['checkout_request_id'] = stk_result.get('checkout_request_id')
+                        response_data['message'] = "M-Pesa STK push initiated successfully."
+                        logger.info(f"STK Push Success: {order.mpesa_checkout_request_id}")
+                    else:
+                        error_msg = stk_result.get('message', 'Unknown M-Pesa error')
+                        response_data['mpesa_error'] = error_msg
+                        logger.error(f"STK Push Failed: {error_msg}")
+                except Exception as mpesa_err:
+                    response_data['mpesa_error'] = str(mpesa_err)
+                    logger.exception(f"STK Push Exception for Order {order.order_number}")
 
-                return Response(response_data, status=status.HTTP_201_CREATED)
+            return Response(response_data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
