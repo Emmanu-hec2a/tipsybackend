@@ -107,6 +107,8 @@ class StoreSerializer(serializers.ModelSerializer):
     dynamic_delivery_fee = serializers.SerializerMethodField()
     is_favourite = serializers.SerializerMethodField()
     is_open = serializers.SerializerMethodField()
+    has_active_promotions = serializers.SerializerMethodField()
+    max_promo_discount = serializers.SerializerMethodField()
     
     # User fields (Writable)
     bank_name = serializers.CharField(source='owner.bank_name', required=False, allow_blank=True)
@@ -166,7 +168,7 @@ class StoreSerializer(serializers.ModelSerializer):
             'opening_time', 'closing_time', 'is_open', 'plan', 'plan_price',
             'subscription_expires', 'subscription_active', 'billing_status',
             'mpesa_shortcode', 'mpesa_consumer_key', 'mpesa_consumer_secret',
-            'mpesa_passkey', 'mpesa_callback_url'
+            'mpesa_passkey', 'mpesa_callback_url', 'has_active_promotions', 'max_promo_discount'
         ]
         read_only_fields = ['owner', 'rating', 'rating_count', 'is_pro', 'plan', 'plan_price', 'subscription_expires', 'billing_status']
 
@@ -208,6 +210,38 @@ class StoreSerializer(serializers.ModelSerializer):
         if user and user.is_authenticated:
             return user.favourite_stores.filter(id=obj.id).exists()
         return False
+
+    def get_has_active_promotions(self, obj):
+        now = timezone.now()
+        return obj.promotions.filter(
+            start_date__lte=now,
+            end_date__gte=now,
+            is_active=True
+        ).exists()
+
+    def get_max_promo_discount(self, obj):
+        now = timezone.now()
+        # Prioritize percentage discounts for the badge
+        promo = obj.promotions.filter(
+            start_date__lte=now,
+            end_date__gte=now,
+            is_active=True,
+            discount_type='percentage'
+        ).order_by('-discount_value').first()
+        if promo:
+            return f"{int(promo.discount_value)}% OFF"
+        
+        # Fallback to fixed amount if no percentage
+        promo_fixed = obj.promotions.filter(
+            start_date__lte=now,
+            end_date__gte=now,
+            is_active=True,
+            discount_type='fixed'
+        ).order_by('-discount_value').first()
+        if promo_fixed:
+            return f"KSh {int(promo_fixed.discount_value)} OFF"
+            
+        return None
 
     def update(self, instance, validated_data):
         # Extract owner data (source fields map to 'owner' dict in validated_data if using dots)
