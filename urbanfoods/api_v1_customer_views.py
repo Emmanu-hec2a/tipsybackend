@@ -7,8 +7,8 @@ import os
 from django.shortcuts import get_object_or_404
 from django.db.models import Q, F, ExpressionWrapper, DecimalField, Avg, Exists, OuterRef, Value, BooleanField, Count
 from django.db.models.functions import Sqrt, Power
-from .models import Store, FoodItem, Order, Rating, SavedAddress, OrderItem, OrderStatusHistory, FoodCategory
-from .api_v1_serializers import StoreSerializer, FoodItemSerializer, OrderSerializer, UserSerializer, SavedAddressSerializer, FoodCategorySerializer
+from .models import Store, FoodItem, Order, Rating, SavedAddress, OrderItem, OrderStatusHistory, FoodCategory, Promotion
+from .api_v1_serializers import StoreSerializer, FoodItemSerializer, OrderSerializer, UserSerializer, SavedAddressSerializer, FoodCategorySerializer, PromotionSerializer
 from .permissions import IsCustomer
 from .mpesa_utils import MpesaIntegration
 from django.utils.decorators import method_decorator
@@ -328,6 +328,68 @@ class CustomerRateOrderView(APIView):
 
         return Response({'status': 'rating saved'})
 
+class AvailablePromotionsView(generics.ListAPIView):
+    serializer_class = PromotionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        from django.utils import timezone
+        store_id = self.request.query_params.get('store_id')
+        if not store_id:
+            return Promotion.objects.none()
+        
+        return Promotion.objects.filter(
+            store_id=store_id,
+            is_active=True,
+            start_date__lte=timezone.now(),
+            end_date__gte=timezone.now()
+        ).filter(
+            Q(usage_limit__isnull=True) | Q(times_used__lt=F('usage_limit'))
+        )
+
+class ValidatePromotionView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from django.utils import timezone
+        code = request.data.get('code')
+        store_id = request.data.get('store_id')
+        subtotal = float(request.data.get('subtotal', 0))
+
+        if not code or not store_id:
+            return Response({'error': 'Code and store_id are required'}, status=400)
+
+        promo = Promotion.objects.filter(
+            store_id=store_id,
+            code__iexact=code,
+            is_active=True,
+            start_date__lte=timezone.now(),
+            end_date__gte=timezone.now()
+        ).first()
+
+        if not promo:
+            return Response({'error': 'Invalid or expired promo code'}, status=400)
+
+        if promo.usage_limit and promo.times_used >= promo.usage_limit:
+            return Response({'error': 'This promo code has reached its usage limit'}, status=400)
+
+        if subtotal < float(promo.min_order_amount):
+            return Response({'error': f'Minimum order amount for this promo is KSh {promo.min_order_amount}'}, status=400)
+
+        # Calculate discount
+        discount = 0
+        if promo.discount_percentage:
+            discount = subtotal * (float(promo.discount_percentage) / 100)
+        elif promo.discount_amount:
+            discount = float(promo.discount_amount)
+
+        return Response({
+            'success': True,
+            'discount_amount': discount,
+            'promo_id': promo.id,
+            'title': promo.title
+        })
+
 class CustomerPlaceOrderView(APIView):
     permission_classes = [IsCustomer]
 
@@ -380,9 +442,6 @@ class CustomerPlaceOrderView(APIView):
                 # Calculate totals and validate single store
                 subtotal = 0
                 order_items_to_create = []
-                # Calculate totals and validate single store
-                subtotal = 0
-                order_items_to_create = []
                 for item in items_data:
                     food_item = get_object_or_404(FoodItem, id=item.get('product_id'))
                     
@@ -401,9 +460,43 @@ class CustomerPlaceOrderView(APIView):
                         price_at_order=food_item.price
                     ))
 
+                # Handle Promotion
+                promo_code = data.get('promo_code')
+                discount_amount = 0
+                if promo_code:
+                    from django.utils import timezone
+                    promo = Promotion.objects.filter(
+                        store=store,
+                        code__iexact=promo_code,
+                        is_active=True,
+                        start_date__lte=timezone.now(),
+                        end_date__gte=timezone.now()
+                    ).first()
+
+                    if promo:
+                        # Check usage limit
+                        if not promo.usage_limit or promo.times_used < promo.usage_limit:
+                            # Check min order
+                            if subtotal >= float(promo.min_order_amount):
+                                if promo.discount_percentage:
+                                    discount_amount = float(subtotal) * (float(promo.discount_percentage) / 100)
+                                elif promo.discount_amount:
+                                    discount_amount = float(promo.discount_amount)
+                                
+                                # Increment usage
+                                promo.times_used = F('times_used') + 1
+                                promo.save()
+                            else:
+                                logger.warning(f"Promo {promo_code} skipped: Subtotal {subtotal} < min {promo.min_order_amount}")
+                        else:
+                            logger.warning(f"Promo {promo_code} skipped: Usage limit reached")
+                    else:
+                        logger.warning(f"Invalid promo code provided: {promo_code}")
+
                 # Dynamic delivery fee from store
                 delivery_fee = store.delivery_fee
-                total = subtotal + delivery_fee
+                total = float(subtotal) + float(delivery_fee) - discount_amount
+                if total < 0: total = 0
 
                 # 🛡️ Tiered Verification Logic
                 risk = calculate_risk_score(request.user, data)
@@ -418,6 +511,8 @@ class CustomerPlaceOrderView(APIView):
                     store=store,
                     subtotal=subtotal,
                     delivery_fee=delivery_fee,
+                    promo_code=promo_code if discount_amount > 0 else None,
+                    discount_amount=discount_amount,
                     total=total,
                     latitude=data.get('latitude'),
                     longitude=data.get('longitude'),

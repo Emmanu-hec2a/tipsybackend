@@ -1,6 +1,7 @@
 from django.urls import path
 from . import views
 from . import admin_views
+from . import api_v1_customer_views
 
 app_name = 'urbanfoods'
 
@@ -53,6 +54,8 @@ urlpatterns = [
 
     # API v1
     path('api/geocode/reverse/', views.reverse_geocode, name='reverse_geocode'),
+    path('api/v1/promotions/available/', api_v1_customer_views.AvailablePromotionsView.as_view(), name='api_available_promotions'),
+    path('api/v1/promotions/validate/', api_v1_customer_views.ValidatePromotionView.as_view(), name='api_validate_promotion'),
     path('api/v1/auth/customer/login/', views.CustomerLoginView.as_view(), name='api_customer_login'),
     path('api/v1/auth/partner/login/', views.PartnerLoginView.as_view(), name='api_partner_login'),
     path('api/v1/auth/rider/login/', views.RiderLoginView.as_view(), name='api_rider_login'),
