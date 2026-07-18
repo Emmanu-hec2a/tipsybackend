@@ -84,6 +84,8 @@ superadmin_patterns = [
     path('orders/', api_v1_superadmin_views.PlatformOrdersView.as_view(), name='superadmin_orders'),
     path('analytics/', api_v1_superadmin_views.PlatformAnalyticsView.as_view(), name='superadmin_analytics'),
     path('pending-partners/', api_v1_superadmin_views.PendingPartnersView.as_view(), name='superadmin_pending_partners'),
+    path('revenue-payouts/pending/', api_v1_superadmin_views.PendingRevenuePayoutsView.as_view(), name='superadmin_pending_payouts'),
+    path('revenue-payouts/<int:pk>/approve/', api_v1_superadmin_views.ApproveRevenuePayoutView.as_view(), name='superadmin_approve_payout'),
 ]
 
 urlpatterns = [

@@ -5,7 +5,7 @@ from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import os
 from django.shortcuts import get_object_or_404
-from django.db.models import Q, F, ExpressionWrapper, DecimalField, Avg, Exists, OuterRef, Value, BooleanField
+from django.db.models import Q, F, ExpressionWrapper, DecimalField, Avg, Exists, OuterRef, Value, BooleanField, Count
 from django.db.models.functions import Sqrt, Power
 from .models import Store, FoodItem, Order, Rating, SavedAddress, OrderItem, OrderStatusHistory, FoodCategory
 from .api_v1_serializers import StoreSerializer, FoodItemSerializer, OrderSerializer, UserSerializer, SavedAddressSerializer, FoodCategorySerializer
@@ -182,12 +182,25 @@ class CustomerProductListView(generics.ListAPIView):
 
     def get_queryset(self):
         # Prioritize products from Pro stores with valid subscriptions
+        # 🛡️ Debt Enforcement Guard: Exclude products from stores with 2+ weeks unpaid share
+        from django.utils import timezone
+        from .models import WeeklyRevenueStat
+        today = timezone.localdate()
+        
+        # Identify stores that are restricted due to debt
+        # (This is a simplified check for performance, normally you'd use a flag or cache)
+        restricted_store_ids = WeeklyRevenueStat.objects.filter(
+            week_end__lt=today,
+            is_paid=False,
+            partner_share_40__gt=0
+        ).values('store').annotate(unpaid_count=Count('id')).filter(unpaid_count__gte=2).values_list('store_id', flat=True)
+
         queryset = FoodItem.objects.filter(
             is_active=True,
             store__is_active=True,
             store__subscription_expires__gte=date.today(),
             store__billing_status='active'
-        ).order_by('-store__is_pro', 'name')
+        ).exclude(store_id__in=restricted_store_ids).order_by('-store__is_pro', 'name')
         
         store_id = self.request.query_params.get('store_id')
         if store_id:

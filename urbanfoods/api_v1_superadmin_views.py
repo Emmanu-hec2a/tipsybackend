@@ -2,7 +2,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.db.models import Sum, Count
-from .models import Store, User, Order
+from django.shortcuts import get_object_or_404
+from .models import Store, User, Order, WeeklyRevenueStat
 from .api_v1_serializers import StoreSerializer, UserSerializer, OrderSerializer
 from .permissions import IsSuperAdmin
 from .utils import send_telegram_notification
@@ -97,3 +98,33 @@ class PendingPartnersView(SuperAdminBaseView, APIView):
         pending = User.objects.filter(role='partner', is_approved=False).order_by('-date_joined')
         serializer = UserSerializer(pending, many=True)
         return Response(serializer.data)
+
+class PendingRevenuePayoutsView(SuperAdminBaseView, APIView):
+    def get(self, request):
+        pending = WeeklyRevenueStat.objects.filter(status='pending').order_by('-week_start')
+        data = []
+        for p in pending:
+            data.append({
+                'id': p.id,
+                'store_name': p.store.name,
+                'week_range': f"{p.week_start} to {p.week_end}",
+                'amount': float(p.partner_share_40),
+                'mpesa_code': p.payouts.mpesa_code if hasattr(p, 'payouts') else "N/A",
+                'submitted_at': p.payouts.paid_at if hasattr(p, 'payouts') else p.created_at
+            })
+        return Response(data)
+
+class ApproveRevenuePayoutView(SuperAdminBaseView, APIView):
+    def post(self, request, pk):
+        stat = get_object_or_404(WeeklyRevenueStat, pk=pk)
+        stat.status = 'paid'
+        stat.is_paid = True
+        stat.save()
+        
+        if stat.store.owner.telegram_chat_id:
+            send_telegram_notification(
+                stat.store.owner.telegram_chat_id,
+                f"✅ <b>Revenue Payout Approved!</b>\nYour payment for week <b>{stat.week_start}</b> has been verified. Dashboard access restored."
+            )
+            
+        return Response({'message': 'Payout approved successfully'})

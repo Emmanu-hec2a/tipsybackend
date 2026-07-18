@@ -87,12 +87,15 @@ class DashboardStatsView(PartnerBaseView, APIView):
 
         # ⚠️ Payout Alert Logic
         # Check if there are any unpaid weeks before current week
-        has_unpaid_overdue = WeeklyRevenueStat.objects.filter(
+        unpaid_weeks = WeeklyRevenueStat.objects.filter(
             store=store, 
             week_end__lt=today,
-            is_paid=False,
+            status='unpaid',
             partner_share_40__gt=0
-        ).exists()
+        )
+        
+        has_unpaid_overdue = unpaid_weeks.exists()
+        is_restricted = unpaid_weeks.count() >= 2
 
         return Response({
             'today_orders': today_orders.count(),
@@ -102,7 +105,8 @@ class DashboardStatsView(PartnerBaseView, APIView):
             'low_stock_count': low_stock_count,
             'monthly_revenue': float(monthly_revenue),
             'monthly_orders': monthly_orders.count(),
-            'has_unpaid_overdue': has_unpaid_overdue
+            'has_unpaid_overdue': has_unpaid_overdue,
+            'is_restricted': is_restricted
         })
 
 class OrderListView(PartnerBaseView, APIView):
@@ -589,7 +593,7 @@ class RevenueSharingView(PartnerBaseView, APIView):
             defaults={'week_end': week_end}
         )
 
-        # Get history (excluding current week if not paid)
+        # Get history (including current week if not paid)
         history = WeeklyRevenueStat.objects.filter(
             store=store
         ).order_by('-week_start')
@@ -603,7 +607,7 @@ class RevenueSharingView(PartnerBaseView, APIView):
                 'week_end': h.week_end,
                 'total_liquor_sales': float(h.total_liquor_sales),
                 'partner_share': float(h.partner_share_40),
-                'is_paid': h.is_paid,
+                'status': h.status,
                 'mpesa_code': payout.mpesa_code if payout else None,
                 'paid_at': payout.paid_at if payout else None
             })
@@ -615,7 +619,7 @@ class RevenueSharingView(PartnerBaseView, APIView):
                 'week_end': current_stat.week_end,
                 'total_liquor_sales': float(current_stat.total_liquor_sales),
                 'partner_share': float(current_stat.partner_share_40),
-                'is_paid': current_stat.is_paid
+                'status': current_stat.status
             },
             'history': history_data
         })
@@ -631,8 +635,8 @@ class RevenueSharingView(PartnerBaseView, APIView):
         store = self.get_store(request)
         stat = get_object_or_404(WeeklyRevenueStat, id=stat_id, store=store)
         
-        if stat.is_paid:
-            return Response({'error': 'Already paid'}, status=400)
+        if stat.status != 'unpaid':
+            return Response({'error': f'Cannot pay. Current status is {stat.status}'}, status=400)
             
         PartnerPayout.objects.create(
             store=store,
@@ -641,10 +645,25 @@ class RevenueSharingView(PartnerBaseView, APIView):
             mpesa_code=mpesa_code.upper()
         )
         
-        stat.is_paid = True
+        stat.status = 'pending'
+        stat.is_paid = False # Safety
         stat.save()
         
-        return Response({'status': 'success', 'message': 'Payment recorded'})
+        # 🛡️ Notify Admin of new payout to verify
+        from .utils import send_telegram_notification
+        msg = (
+            f"💰 <b>New Revenue Payout Submission</b>\n"
+            f"Store: {store.name}\n"
+            f"Amount: KSh {stat.partner_share_40}\n"
+            f"M-Pesa Code: {mpesa_code.upper()}\n"
+            f"Week: {stat.week_start} to {stat.week_end}\n"
+            f"<i>Please verify and approve in Admin panel.</i>"
+        )
+        # We'll use the platform admin chat or similar
+        admin_chat_id = "5191834221" 
+        send_telegram_notification(admin_chat_id, msg)
+        
+        return Response({'status': 'success', 'message': 'Payment submitted for verification'})
 
 class VerifyRevenueGateView(PartnerBaseView, APIView):
     def post(self, request):

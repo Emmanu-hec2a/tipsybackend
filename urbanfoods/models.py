@@ -573,12 +573,18 @@ class Rating(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 class WeeklyRevenueStat(models.Model):
+    PAYOUT_STATUS_CHOICES = [
+        ('unpaid', 'Unpaid'),
+        ('pending', 'Pending Verification'),
+        ('paid', 'Paid'),
+    ]
     store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='revenue_stats')
     week_start = models.DateField()
     week_end = models.DateField()
     total_liquor_sales = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
     partner_share_40 = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
-    is_paid = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, choices=PAYOUT_STATUS_CHOICES, default='unpaid')
+    is_paid = models.BooleanField(default=False, help_text="Legacy field, use status instead")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
