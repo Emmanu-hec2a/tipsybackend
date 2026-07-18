@@ -736,7 +736,8 @@ def _confirm_payment(order, receipt_number=None, notes='Payment confirmed'):
 
     # Notifications (Wrapped in try-except to prevent crashing the payment flow)
     try:
-        from .utils import notify_payment_received
+        from .utils import notify_payment_received, update_weekly_revenue_share
+        update_weekly_revenue_share(order)
         notify_payment_received(order)
         send_customer_order_confirmation(order)
         send_admin_order_notification(order)

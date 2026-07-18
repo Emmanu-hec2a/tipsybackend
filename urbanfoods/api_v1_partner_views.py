@@ -6,7 +6,10 @@ from rest_framework.throttling import ScopedRateThrottle
 from django.utils import timezone
 from django.db.models import Sum, Count, Q, F
 from django.db.models.functions import TruncDate
-from .models import Order, FoodItem, User, Store, OrderItem, FoodCategory, Promotion, SubscriptionPayment, MarketingBlast
+from .models import (
+    Order, FoodItem, User, Store, OrderItem, FoodCategory, 
+    Promotion, SubscriptionPayment, MarketingBlast, WeeklyRevenueStat, PartnerPayout
+)
 from .api_v1_serializers import (
     OrderSerializer, FoodItemSerializer, UserSerializer, 
     StoreSerializer, FoodCategorySerializer, PromotionSerializer,
@@ -16,6 +19,7 @@ from .permissions import IsPartner, QueryParamJWTAuthentication
 from .utils import haversine_distance_km
 from .tasks import send_marketing_blast_task
 from datetime import timedelta
+from django.shortcuts import get_object_or_404
 import logging
 import io
 from django.template.loader import get_template
@@ -81,6 +85,15 @@ class DashboardStatsView(PartnerBaseView, APIView):
             payment_status='paid'
         ).aggregate(total=Sum('total'))['total'] or 0
 
+        # ⚠️ Payout Alert Logic
+        # Check if there are any unpaid weeks before current week
+        has_unpaid_overdue = WeeklyRevenueStat.objects.filter(
+            store=store, 
+            week_end__lt=today,
+            is_paid=False,
+            partner_share_40__gt=0
+        ).exists()
+
         return Response({
             'today_orders': today_orders.count(),
             'today_revenue': float(today_revenue),
@@ -89,6 +102,7 @@ class DashboardStatsView(PartnerBaseView, APIView):
             'low_stock_count': low_stock_count,
             'monthly_revenue': float(monthly_revenue),
             'monthly_orders': monthly_orders.count(),
+            'has_unpaid_overdue': has_unpaid_overdue
         })
 
 class OrderListView(PartnerBaseView, APIView):
@@ -557,3 +571,85 @@ class MarketingStatsView(PartnerBaseView, APIView):
             'recent_blasts': blasts_data,
             'can_blast': not (recent_blasts and (timezone.now() - recent_blasts[0].created_at) < timedelta(hours=1))
         })
+
+class RevenueSharingView(PartnerBaseView, APIView):
+    def get(self, request):
+        store = self.get_store(request)
+        if not store:
+            return Response({'error': 'No store associated'}, status=403)
+
+        # Get current week
+        today = timezone.localdate()
+        week_start = today - timedelta(days=today.weekday())
+        week_end = week_start + timedelta(days=6)
+
+        current_stat, _ = WeeklyRevenueStat.objects.get_or_create(
+            store=store,
+            week_start=week_start,
+            defaults={'week_end': week_end}
+        )
+
+        # Get history (excluding current week if not paid)
+        history = WeeklyRevenueStat.objects.filter(
+            store=store
+        ).order_by('-week_start')
+
+        history_data = []
+        for h in history:
+            payout = PartnerPayout.objects.filter(week_stat=h).first()
+            history_data.append({
+                'id': h.id,
+                'week_start': h.week_start,
+                'week_end': h.week_end,
+                'total_liquor_sales': float(h.total_liquor_sales),
+                'partner_share': float(h.partner_share_40),
+                'is_paid': h.is_paid,
+                'mpesa_code': payout.mpesa_code if payout else None,
+                'paid_at': payout.paid_at if payout else None
+            })
+
+        return Response({
+            'current_week': {
+                'id': current_stat.id,
+                'week_start': current_stat.week_start,
+                'week_end': current_stat.week_end,
+                'total_liquor_sales': float(current_stat.total_liquor_sales),
+                'partner_share': float(current_stat.partner_share_40),
+                'is_paid': current_stat.is_paid
+            },
+            'history': history_data
+        })
+
+    def post(self, request):
+        # Mark as paid
+        stat_id = request.data.get('stat_id')
+        mpesa_code = request.data.get('mpesa_code')
+        
+        if not stat_id or not mpesa_code:
+            return Response({'error': 'Missing stat_id or mpesa_code'}, status=400)
+            
+        store = self.get_store(request)
+        stat = get_object_or_404(WeeklyRevenueStat, id=stat_id, store=store)
+        
+        if stat.is_paid:
+            return Response({'error': 'Already paid'}, status=400)
+            
+        PartnerPayout.objects.create(
+            store=store,
+            week_stat=stat,
+            amount=stat.partner_share_40,
+            mpesa_code=mpesa_code.upper()
+        )
+        
+        stat.is_paid = True
+        stat.save()
+        
+        return Response({'status': 'success', 'message': 'Payment recorded'})
+
+class VerifyRevenueGateView(PartnerBaseView, APIView):
+    def post(self, request):
+        password = request.data.get('password')
+        # Default security gate password for V1
+        if password == "TipsyPartner2026":
+            return Response({'success': True})
+        return Response({'success': False}, status=401)

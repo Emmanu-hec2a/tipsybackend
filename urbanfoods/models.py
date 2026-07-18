@@ -572,6 +572,32 @@ class Rating(models.Model):
     comment = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+class WeeklyRevenueStat(models.Model):
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='revenue_stats')
+    week_start = models.DateField()
+    week_end = models.DateField()
+    total_liquor_sales = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    partner_share_40 = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    is_paid = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['store', 'week_start']
+        ordering = ['-week_start']
+
+    def __str__(self):
+        return f"{self.store.name} - Week {self.week_start}"
+
+class PartnerPayout(models.Model):
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='payouts')
+    week_stat = models.OneToOneField(WeeklyRevenueStat, on_delete=models.CASCADE)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    mpesa_code = models.CharField(max_length=20)
+    paid_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return f"{self.store.name} - {self.mpesa_code} ({self.amount})"
+
 class RiderEarning(models.Model):
     rider = models.ForeignKey(User, on_delete=models.CASCADE, related_name='earnings')
     order = models.OneToOneField(Order, on_delete=models.CASCADE)

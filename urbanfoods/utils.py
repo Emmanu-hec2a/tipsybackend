@@ -269,6 +269,43 @@ def send_telegram_message(message, buttons=None):
         logger.error(f"Telegram error: {e}")
         return False
 
+def update_weekly_revenue_share(order):
+    """
+    Calculate 40% of liquor items in an order and update the weekly revenue stats.
+    Called when an order is marked as 'paid'.
+    """
+    from .models import WeeklyRevenueStat
+    from decimal import Decimal
+    from datetime import timedelta
+    from django.utils import timezone
+    
+    if not order.store:
+        return
+
+    # Calculate liquor total for this order
+    liquor_total = Decimal('0.00')
+    for item in order.items.all():
+        if item.food_item.store_type == 'liquor':
+            liquor_total += item.subtotal
+
+    if liquor_total <= 0:
+        return
+
+    # Get or create current week stat
+    today = timezone.localdate()
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+
+    stat, created = WeeklyRevenueStat.objects.get_or_create(
+        store=order.store,
+        week_start=week_start,
+        defaults={'week_end': week_end}
+    )
+
+    # Update totals
+    stat.total_liquor_sales += liquor_total
+    stat.partner_share_40 += (liquor_total * Decimal('0.40'))
+    stat.save()
 
 def notify_new_order(order):
     try:
