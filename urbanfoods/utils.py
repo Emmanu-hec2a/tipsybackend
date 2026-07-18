@@ -199,44 +199,73 @@ def _send_telegram_message_single(message, buttons=None):
         logger.error(f"❌ Telegram error: {e}")
         return False
 
-def send_telegram_notification(chat_id, message):
-    """Send a single telegram message to a specific chat ID"""
+def send_telegram_notification(chat_id, message, bot_type='merchant'):
+    """
+    Send a single telegram message to a specific chat ID.
+    bot_type: 'merchant' (default) or 'admin'
+    """
     if not chat_id:
         return False
     
     try:
-        bot_token = getattr(settings, 'TELEGRAM_BOTT_TOKEN', None)
+        # 🤖 Select the correct bot token based on type
+        if bot_type == 'admin':
+            bot_token = getattr(settings, 'TELEGRAM_ADMIN_BOT_TOKEN', None)
+        else:
+            bot_token = getattr(settings, 'TELEGRAM_MERCHANT_BOT_TOKEN', None)
+            
+        # Fallback to legacy token if new ones aren't set yet
         if not bot_token:
+            bot_token = getattr(settings, 'TELEGRAM_BOTT_TOKEN', None)
+
+        if not bot_token:
+            logger.warning(f"Telegram {bot_type} bot token not configured")
             return False
             
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         payload = {
             'chat_id': chat_id,
             'text': message,
-            'parse_mode': 'HTML'
+            'parse_mode': 'HTML',
+            'disable_web_page_preview': True
         }
         response = requests.post(url, data=payload, timeout=10)
+        
+        if response.status_code != 200:
+            logger.error(f"Telegram failed for {chat_id}: {response.text}")
+            
         return response.status_code == 200
     except Exception as e:
         logger.error(f"Error sending telegram notification: {e}")
         return False
 
-def send_telegram_message(message, buttons=None):
+def send_telegram_message(message, buttons=None, bot_type='admin'):
+    """
+    Send to global admin chat IDs. 
+    Default bot_type is 'admin' because this usually goes to the SuperAdmin group.
+    """
     try:
-        bot_token = getattr(settings, 'TELEGRAM_BOTT_TOKEN', None)
+        if bot_type == 'admin':
+            bot_token = getattr(settings, 'TELEGRAM_ADMIN_BOT_TOKEN', None)
+        else:
+            bot_token = getattr(settings, 'TELEGRAM_MERCHANT_BOT_TOKEN', None)
+
+        # Fallback
+        if not bot_token:
+            bot_token = getattr(settings, 'TELEGRAM_BOTT_TOKEN', None)
+
         chat_ids = getattr(settings, 'TELEGRAM_CHATT_IDS', None)
         if not chat_ids:
             chat_ids = getattr(settings, 'TELEGRAM_CHATT_ID', None)
 
+        if not bot_token or not chat_ids:
+            logger.warning(f"Telegram {bot_type} credentials not configured")
+            return False
+
         if isinstance(chat_ids, str):
             chat_ids = [chat_id.strip() for chat_id in chat_ids.split(',') if chat_id.strip()]
 
-        if not bot_token or not chat_ids:
-            logger.warning("Telegram credentials not configured")
-            return False
-
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-
         base_payload = {
             'text': message,
             'parse_mode': 'HTML',
@@ -244,27 +273,15 @@ def send_telegram_message(message, buttons=None):
         }
 
         if buttons:
-            base_payload['reply_markup'] = json.dumps({
-                "inline_keyboard": buttons
-            })
+            base_payload['reply_markup'] = json.dumps({"inline_keyboard": buttons})
 
         sent_count = 0
         for chat_id in chat_ids:
-            payload = {
-                **base_payload,
-                'chat_id': chat_id,
-            }
-
+            payload = {**base_payload, 'chat_id': chat_id}
             response = requests.post(url, data=payload, timeout=10)
-
             if response.status_code == 200:
                 sent_count += 1
-                logger.info(f"Telegram message sent to {chat_id}")
-            else:
-                logger.error(f"Telegram failed for {chat_id}: {response.text}")
-
         return sent_count > 0
-
     except Exception as e:
         logger.error(f"Telegram error: {e}")
         return False

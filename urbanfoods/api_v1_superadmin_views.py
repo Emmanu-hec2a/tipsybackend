@@ -124,7 +124,8 @@ class ApproveRevenuePayoutView(SuperAdminBaseView, APIView):
         if stat.store.owner.telegram_chat_id:
             send_telegram_notification(
                 stat.store.owner.telegram_chat_id,
-                f"✅ <b>Revenue Payout Approved!</b>\nYour payment for week <b>{stat.week_start}</b> has been verified. Dashboard access restored."
+                f"✅ <b>Revenue Payout Approved!</b>\nYour payment for week <b>{stat.week_start}</b> has been verified. Dashboard access restored.",
+                bot_type='admin' # Verification results still come from Admin bot
             )
             
         return Response({'message': 'Payout approved successfully'})

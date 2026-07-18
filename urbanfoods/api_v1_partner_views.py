@@ -661,7 +661,7 @@ class RevenueSharingView(PartnerBaseView, APIView):
         )
         # We'll use the platform admin chat or similar
         admin_chat_id = "5191834221" 
-        send_telegram_notification(admin_chat_id, msg)
+        send_telegram_notification(admin_chat_id, msg, bot_type='admin')
         
         return Response({'status': 'success', 'message': 'Payment submitted for verification'})
 

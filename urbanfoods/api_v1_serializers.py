@@ -162,7 +162,7 @@ class StoreSerializer(serializers.ModelSerializer):
             'base_delivery_fee', 'base_distance_km', 'extra_distance_surcharge',
             'avg_delivery_minutes', 'latitude', 'longitude', 'is_pro', 'is_favourite', 
             'distance', 'bank_name', 'bank_account_name', 'bank_account_number',
-            'phone', 'email', 'address_string',
+            'phone', 'email', 'address_string', 'telegram_chat_id',
             'opening_time', 'closing_time', 'is_open', 'plan', 'plan_price',
             'subscription_expires', 'subscription_active', 'billing_status',
             'mpesa_shortcode', 'mpesa_consumer_key', 'mpesa_consumer_secret',
