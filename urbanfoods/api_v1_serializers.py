@@ -109,6 +109,7 @@ class StoreSerializer(serializers.ModelSerializer):
     is_open = serializers.SerializerMethodField()
     has_active_promotions = serializers.SerializerMethodField()
     max_promo_discount = serializers.SerializerMethodField()
+    subscription_active = serializers.BooleanField(read_only=True)
     
     # User fields (Writable)
     bank_name = serializers.CharField(source='owner.bank_name', required=False, allow_blank=True)
@@ -226,20 +227,20 @@ class StoreSerializer(serializers.ModelSerializer):
             start_date__lte=now,
             end_date__gte=now,
             is_active=True,
-            discount_type='percentage'
-        ).order_by('-discount_value').first()
+            discount_percentage__isnull=False
+        ).order_by('-discount_percentage').first()
         if promo:
-            return f"{int(promo.discount_value)}% OFF"
+            return f"{int(promo.discount_percentage)}% OFF"
         
         # Fallback to fixed amount if no percentage
         promo_fixed = obj.promotions.filter(
             start_date__lte=now,
             end_date__gte=now,
             is_active=True,
-            discount_type='fixed'
-        ).order_by('-discount_value').first()
+            discount_amount__isnull=False
+        ).order_by('-discount_amount').first()
         if promo_fixed:
-            return f"KSh {int(promo_fixed.discount_value)} OFF"
+            return f"KSh {int(promo_fixed.discount_amount)} OFF"
             
         return None
 
