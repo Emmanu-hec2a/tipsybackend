@@ -567,13 +567,19 @@ class MarketingStatsView(PartnerBaseView, APIView):
             'created_at': b.created_at.isoformat()
         } for b in recent_blasts]
 
+        # Calculate cooldown status
+        cooldown_active = False
+        if recent_blasts:
+            time_since_last = timezone.now() - recent_blasts[0].created_at
+            cooldown_active = time_since_last < timedelta(hours=1)
+
         return Response({
             'store_views': f"{store_views:,}",
             'menu_clicks': f"{menu_clicks:,}",
             'customer_reach': f"{customer_reach:,}",
             'brand_score': 'A+' if store.rating >= 4.5 else 'A' if store.rating >= 4.0 else 'B',
             'recent_blasts': blasts_data,
-            'can_blast': not (recent_blasts and (timezone.now() - recent_blasts[0].created_at) < timedelta(hours=1))
+            'can_blast': not cooldown_active
         })
 
 class RevenueSharingView(PartnerBaseView, APIView):
