@@ -54,6 +54,7 @@ SITE_ID = 1
 
 # Application definition
 INSTALLED_APPS = [
+    'daphne',
     'unfold',
     'unfold.contrib.filters',
     'django.contrib.admin',  # Django's built-in admin
@@ -66,7 +67,6 @@ INSTALLED_APPS = [
     'django.contrib.sites',  # Required for sitemaps
     'django.contrib.sitemaps',
     'django_celery_beat',
-    'daphne',
     'channels',
     'urbanfoods',  # Your app name
     'rest_framework',  # For API endpoints
