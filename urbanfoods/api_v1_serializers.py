@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.utils import timezone
 import datetime
-from .models import User, Store, Order, OrderItem, FoodItem, Rating, RiderEarning, FoodCategory, Promotion, SubscriptionPayment, SavedAddress, RiderLocationPing
+from .models import User, Store, Order, OrderItem, FoodItem, Rating, RiderEarning, FoodCategory, Promotion, SubscriptionPayment, SavedAddress, RiderLocationPing, ChatMessage
 
 from django.core.cache import cache
 
@@ -341,6 +341,13 @@ class OrderSerializer(serializers.ModelSerializer):
     # Rider current location
     rider_latitude = serializers.SerializerMethodField()
     rider_longitude = serializers.SerializerMethodField()
+    has_unread_messages = serializers.SerializerMethodField()
+
+    def get_has_unread_messages(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        return ChatMessage.objects.filter(order=obj, is_read=False).exclude(sender=request.user).exists()
 
     def get_rider_latitude(self, obj):
         if obj.assigned_rider:
@@ -429,7 +436,8 @@ class OrderSerializer(serializers.ModelSerializer):
             'promo_code', 'discount_amount',
             'store_name', 'store_latitude', 'store_longitude',
             'rider_latitude', 'rider_longitude',
-            'requires_rider_verification', 'rider_verified_at', 'rider_verification_method', 'verification_image_url'
+            'requires_rider_verification', 'rider_verified_at', 'rider_verification_method', 'verification_image_url',
+            'has_unread_messages'
         ]
         read_only_fields = ['order_number', 'created_at']
 
@@ -569,3 +577,12 @@ class SavedAddressSerializer(serializers.ModelSerializer):
         model = SavedAddress
         fields = '__all__'
         read_only_fields = ['user']
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    sender_name = serializers.ReadOnlyField(source='sender.username')
+    sender_role = serializers.ReadOnlyField(source='sender.role')
+
+    class Meta:
+        model = ChatMessage
+        fields = ['id', 'order', 'sender', 'sender_name', 'sender_role', 'message', 'is_read', 'created_at']
+        read_only_fields = ['sender', 'is_read', 'created_at']

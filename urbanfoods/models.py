@@ -574,6 +574,19 @@ class Rating(models.Model):
     comment = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+class ChatMessage(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='chat_messages')
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"From {self.sender.username} for Order {self.order.order_number}"
+
 class WeeklyRevenueStat(models.Model):
     PAYOUT_STATUS_CHOICES = [
         ('unpaid', 'Unpaid'),

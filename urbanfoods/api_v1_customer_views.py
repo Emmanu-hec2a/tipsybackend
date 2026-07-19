@@ -7,8 +7,8 @@ import os
 from django.shortcuts import get_object_or_404
 from django.db.models import Q, F, ExpressionWrapper, DecimalField, Avg, Exists, OuterRef, Value, BooleanField, Count
 from django.db.models.functions import Sqrt, Power
-from .models import Store, FoodItem, Order, Rating, SavedAddress, OrderItem, OrderStatusHistory, FoodCategory, Promotion
-from .api_v1_serializers import StoreSerializer, FoodItemSerializer, OrderSerializer, UserSerializer, SavedAddressSerializer, FoodCategorySerializer, PromotionSerializer
+from .models import Store, FoodItem, Order, Rating, SavedAddress, OrderItem, OrderStatusHistory, FoodCategory, Promotion, ChatMessage
+from .api_v1_serializers import StoreSerializer, FoodItemSerializer, OrderSerializer, UserSerializer, SavedAddressSerializer, FoodCategorySerializer, PromotionSerializer, ChatMessageSerializer
 from .permissions import IsCustomer
 from .mpesa_utils import MpesaIntegration
 from django.utils.decorators import method_decorator
@@ -236,6 +236,56 @@ class CustomerOrderDetailView(generics.RetrieveAPIView):
 
     def get_queryset(self):
         return Order.objects.filter(user=self.request.user)
+
+class OrderChatMessagesView(generics.ListCreateAPIView):
+    serializer_class = ChatMessageSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        order_id = self.kwargs.get('order_id')
+        # Security: Customer or Rider must be part of the order
+        user = self.request.user
+        queryset = ChatMessage.objects.filter(order_id=order_id)
+        
+        if user.role == 'customer':
+            queryset = queryset.filter(order__user=user)
+        elif user.role == 'rider':
+            queryset = queryset.filter(order__assigned_rider=user)
+        else:
+            return ChatMessage.objects.none()
+            
+        # Optimization: Mark unread messages from OTHER as read
+        ChatMessage.objects.filter(
+            order_id=order_id,
+            is_read=False
+        ).exclude(sender=user).update(is_read=True)
+            
+        return queryset.order_by('created_at')
+
+    def perform_create(self, serializer):
+        order_id = self.kwargs.get('order_id')
+        order = get_object_or_404(Order, id=order_id)
+        
+        # Security: Sender must be the customer or the assigned rider
+        if self.request.user != order.user and self.request.user != order.assigned_rider:
+            raise permissions.PermissionDenied("You are not authorized to message on this order.")
+
+        msg = serializer.save(order=order, sender=self.request.user)
+        
+        # Trigger FCM Notification to the other party
+        recipient = order.assigned_rider if self.request.user == order.user else order.user
+        if recipient:
+            from .utils import send_fcm_notification
+            send_fcm_notification(
+                user=recipient,
+                title=f"Message from {self.request.user.username}",
+                body=msg.message,
+                data={
+                    'type': 'chat',
+                    'order_id': str(order.id),
+                    'order_number': order.order_number
+                }
+            )
 
 class CustomerRetryPaymentView(APIView):
     permission_classes = [IsCustomer]

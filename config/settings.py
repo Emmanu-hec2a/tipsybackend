@@ -66,6 +66,8 @@ INSTALLED_APPS = [
     'django.contrib.sites',  # Required for sitemaps
     'django.contrib.sitemaps',
     'django_celery_beat',
+    'daphne',
+    'channels',
     'urbanfoods',  # Your app name
     'rest_framework',  # For API endpoints
     'corsheaders',
@@ -106,6 +108,16 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'config.wsgi.application'
+ASGI_APPLICATION = 'config.asgi.application'
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [os.environ.get('REDIS_URL', 'redis://localhost:6379/0')],
+        },
+    },
+}
 
 # Database Configuration
 # Use PostgreSQL from Railway if DATABASE_URL exists, otherwise SQLite for local dev
