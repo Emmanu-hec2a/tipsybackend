@@ -336,7 +336,9 @@ class OrderSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source='user.username', read_only=True)
     customer_phone = serializers.CharField(source='user.phone', read_only=True)
     customer_email = serializers.EmailField(source='user.email', read_only=True)
-    rider_name = serializers.CharField(source='assigned_rider.username', read_only=True, allow_null=True)
+    customer_image = serializers.SerializerMethodField()
+    rider_name = serializers.SerializerMethodField()
+    rider_image = serializers.SerializerMethodField()
     
     # Rider current location
     rider_latitude = serializers.SerializerMethodField()
@@ -389,6 +391,28 @@ class OrderSerializer(serializers.ModelSerializer):
             return reverse('order_verification_image', args=[obj.order_number])
         return None
 
+    def get_customer_image(self, obj):
+        if obj.user.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.user.profile_picture.url)
+            return obj.user.profile_picture.url
+        return None
+
+    def get_rider_name(self, obj):
+        if obj.assigned_rider:
+            name = obj.assigned_rider.get_full_name()
+            return name if name.strip() else obj.assigned_rider.username
+        return None
+
+    def get_rider_image(self, obj):
+        if obj.assigned_rider and obj.assigned_rider.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.assigned_rider.profile_picture.url)
+            return obj.assigned_rider.profile_picture.url
+        return None
+
     def validate_phone(self, value):
         """Clean and validate phone number for Kenya/Daraja."""
         if not value:
@@ -430,7 +454,8 @@ class OrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'customer_name', 'customer_phone', 'customer_email', 'rider_name', 'status', 
+            'id', 'order_number', 'customer_name', 'customer_phone', 'customer_email', 'customer_image',
+            'rider_name', 'rider_image', 'status',
             'payment_status', 'payment_method', 'total', 'latitude', 'longitude', 'address_string',
             'google_maps_link', 'created_at', 'items', 'delivery_fee', 'tip_amount',
             'promo_code', 'discount_amount',
@@ -579,10 +604,19 @@ class SavedAddressSerializer(serializers.ModelSerializer):
         read_only_fields = ['user']
 
 class ChatMessageSerializer(serializers.ModelSerializer):
-    sender_name = serializers.ReadOnlyField(source='sender.username')
+    sender_name = serializers.ReadOnlyField(source='sender.get_full_name')
     sender_role = serializers.ReadOnlyField(source='sender.role')
+    sender_image = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatMessage
-        fields = ['id', 'order', 'sender', 'sender_name', 'sender_role', 'message', 'is_read', 'created_at']
+        fields = ['id', 'order', 'sender', 'sender_name', 'sender_role', 'sender_image', 'message', 'is_read', 'created_at']
         read_only_fields = ['sender', 'is_read', 'created_at']
+
+    def get_sender_image(self, obj):
+        if obj.sender.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.sender.profile_picture.url)
+            return obj.sender.profile_picture.url
+        return None

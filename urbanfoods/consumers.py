@@ -1,4 +1,5 @@
 import json
+from django.utils import timezone
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from .models import Order, ChatMessage, User
@@ -76,6 +77,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
     def save_message(self, text):
         try:
             order = Order.objects.get(id=self.order_id)
+            
+            # Security: If no rider is assigned, customer cannot message
+            if not order.assigned_rider and self.user.role == 'customer':
+                return {'error': 'No rider assigned to this order yet.'}
+
             msg = ChatMessage.objects.create(
                 order=order,
                 sender=self.user,
@@ -88,7 +94,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 from .utils import send_fcm_notification
                 send_fcm_notification(
                     user=recipient,
-                    title=f"Message from {self.user.username}",
+                    title=f"Message from {self.user.get_full_name() or self.user.username}",
                     body=text,
                     data={
                         'type': 'chat',
@@ -98,6 +104,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 )
 
             # Use serializer to get the same format as REST API
+            # Note: Serializer uses self.context['request'] for absolute URIs, 
+            # we need to simulate or pass a fake context for WebSocket.
+            # However, for WebSockets, relative URLs are often fine or we can pass a dummy request.
             serializer = ChatMessageSerializer(msg)
             return serializer.data
         except Exception as e:

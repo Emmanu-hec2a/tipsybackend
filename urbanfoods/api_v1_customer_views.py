@@ -270,6 +270,11 @@ class OrderChatMessagesView(generics.ListCreateAPIView):
         if self.request.user != order.user and self.request.user != order.assigned_rider:
             raise permissions.PermissionDenied("You are not authorized to message on this order.")
 
+        # Security: If no rider is assigned, customer cannot message
+        if not order.assigned_rider and self.request.user.role == 'customer':
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'error': 'No rider assigned to this order yet.'})
+
         msg = serializer.save(order=order, sender=self.request.user)
         
         # Trigger FCM Notification to the other party
@@ -278,7 +283,7 @@ class OrderChatMessagesView(generics.ListCreateAPIView):
             from .utils import send_fcm_notification
             send_fcm_notification(
                 user=recipient,
-                title=f"Message from {self.request.user.username}",
+                title=f"Message from {self.request.user.get_full_name() or self.request.user.username}",
                 body=msg.message,
                 data={
                     'type': 'chat',
