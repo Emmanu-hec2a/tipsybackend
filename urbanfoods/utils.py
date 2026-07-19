@@ -145,9 +145,11 @@ except Exception as e:
 def send_fcm_notification(user, title, body, data=None):
     """Send FCM push notification to a specific user"""
     if not user.fcm_token:
+        logger.warning(f"Skipping FCM for user {user.id}: No token found")
         return False
     
     try:
+        # Construct message with platform-specific overrides for high priority
         message = messaging.Message(
             notification=messaging.Notification(
                 title=title,
@@ -155,12 +157,40 @@ def send_fcm_notification(user, title, body, data=None):
             ),
             data=data or {},
             token=user.fcm_token,
+            android=messaging.AndroidConfig(
+                priority='high',
+                notification=messaging.AndroidNotification(
+                    channel_id='high_importance_channel',
+                    priority='max',
+                    default_sound=True,
+                ),
+            ),
+            apns=messaging.APNSConfig(
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(
+                        alert=messaging.ApsAlert(
+                            title=title,
+                            body=body,
+                        ),
+                        sound='default',
+                        badge=1,
+                    ),
+                ),
+            ),
         )
         response = messaging.send(message)
-        logger.info(f"Successfully sent FCM message: {response}")
+        logger.info(f"Successfully sent FCM message to user {user.id}: {response}")
         return True
+    except messaging.ApiCallError as e:
+        logger.error(f"FCM API Error for user {user.id}: {e.code} - {e.message}")
+        if e.code == 'UNREGISTERED':
+            # Clean up stale token
+            user.fcm_token = None
+            user.save(update_fields=['fcm_token'])
+            logger.info(f"Removed unregistered FCM token for user {user.id}")
+        return False
     except Exception as e:
-        logger.error(f"Error sending FCM message: {e}")
+        logger.error(f"Unexpected error sending FCM message to user {user.id}: {e}")
         return False
 
 def _send_telegram_message_single(message, buttons=None):

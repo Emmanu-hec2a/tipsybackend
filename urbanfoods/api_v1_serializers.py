@@ -316,10 +316,20 @@ class FoodItemSerializer(serializers.ModelSerializer):
 
 class OrderItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='food_item.name', read_only=True)
+    product_image = serializers.SerializerMethodField()
+    store_id = serializers.IntegerField(source='food_item.store.id', read_only=True)
 
     class Meta:
         model = OrderItem
-        fields = ['id', 'food_item', 'product_name', 'quantity', 'price_at_order', 'subtotal']
+        fields = ['id', 'food_item', 'product_name', 'product_image', 'store_id', 'quantity', 'price_at_order', 'subtotal']
+
+    def get_product_image(self, obj):
+        if obj.food_item and obj.food_item.image:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.food_item.image.url)
+            return obj.food_item.image.url
+        return None
 
 class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
