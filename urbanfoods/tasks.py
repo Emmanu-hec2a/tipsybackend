@@ -43,15 +43,17 @@ def send_marketing_blast_task(store_id, blast_id):
         store = Store.objects.get(id=store_id)
         blast = MarketingBlast.objects.get(id=blast_id)
         
-        # Get unique customers who have ordered from this store
-        # This can be refined based on 'follower' logic if implemented later
+        # Get unique customers who have ordered from this store AND have an FCM token
         from .models import Order
-        customer_ids = Order.objects.filter(store=store).values_list('user_id', flat=True).distinct()
+        customer_ids = Order.objects.filter(
+            store=store, 
+            user__fcm_token__isnull=False
+        ).exclude(user__fcm_token='').values_list('user_id', flat=True).distinct()
         
-        customers = User.objects.filter(id__in=customer_ids, fcm_token__isnull=False).exclude(fcm_token='')
+        customers_with_tokens = User.objects.filter(id__in=customer_ids)
         
         count = 0
-        for customer in customers:
+        for customer in customers_with_tokens:
             send_single_marketing_notification.delay(
                 customer.id, 
                 store.name, 
