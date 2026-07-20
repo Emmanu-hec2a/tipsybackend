@@ -62,52 +62,61 @@ class DashboardStatsView(PartnerBaseView, APIView):
         if not store:
             return Response({'error': 'No store associated'}, status=status.HTTP_404_NOT_FOUND)
             
+        # 🛡️ Redis Server-Side Caching (5 Minutes)
+        from django.core.cache import cache
+        cache_key = f"dashboard_stats_{store.id}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return Response(cached_data)
+
         today = timezone.localdate()
         start_of_day = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.min.time()))
         end_of_day = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.max.time()))
         
-        # Today's core metrics
-        today_orders = Order.objects.filter(store=store, created_at__range=(start_of_day, end_of_day))
-        # Revenue is sum of 'paid' orders for today
-        today_revenue = today_orders.filter(
-            payment_status='paid'
-        ).aggregate(total=Sum('total'))['total'] or 0
+        # 1. Dashboard Aggregation (Combine multiple counts/sums into one query)
+        dashboard_agg = Order.objects.filter(store=store).aggregate(
+            today_orders_count=Count('id', filter=Q(created_at__range=(start_of_day, end_of_day))),
+            today_revenue=Sum('total', filter=Q(created_at__range=(start_of_day, end_of_day), payment_status='paid')),
+            monthly_orders_count=Count('id', filter=Q(created_at__gte=start_of_month)),
+            monthly_revenue=Sum('total', filter=Q(created_at__gte=start_of_month, payment_status='paid')),
+            pending_count=Count('id', filter=Q(status='pending')),
+            processing_count=Count('id', filter=Q(status='processing'))
+        )
         
-        # Operational KPIs
-        pending_orders = Order.objects.filter(store=store, status='pending').count()
-        processing_orders = Order.objects.filter(store=store, status='processing').count()
-        low_stock_count = FoodItem.objects.filter(store=store, stock__lte=F('low_stock_threshold'), is_active=True).count()
+        # 2. Inventory Check
+        low_stock_count = FoodItem.objects.filter(
+            store=store, 
+            stock__lte=F('low_stock_threshold'), 
+            is_active=True
+        ).count()
         
-        # Monthly Growth / Performance
-        start_of_month = timezone.make_aware(timezone.datetime.combine(today.replace(day=1), timezone.datetime.min.time()))
-        monthly_orders = Order.objects.filter(store=store, created_at__gte=start_of_month)
-        monthly_revenue = monthly_orders.filter(
-            payment_status='paid'
-        ).aggregate(total=Sum('total'))['total'] or 0
-
-        # ⚠️ Payout Alert Logic
-        # Check if there are any unpaid weeks before current week
-        unpaid_weeks = WeeklyRevenueStat.objects.filter(
+        # 3. Payout Alert Logic
+        unpaid_stats = WeeklyRevenueStat.objects.filter(
             store=store, 
             week_end__lt=today,
             status='unpaid',
             partner_share_40__gt=0
-        )
+        ).values_list('id', flat=True)
         
-        has_unpaid_overdue = unpaid_weeks.exists()
-        is_restricted = unpaid_weeks.count() >= 2
+        unpaid_count = len(unpaid_stats)
+        has_unpaid_overdue = unpaid_count > 0
+        is_restricted = unpaid_count >= 2
 
-        return Response({
-            'today_orders': today_orders.count(),
-            'today_revenue': float(today_revenue),
-            'pending_orders': pending_orders,
-            'processing_orders': processing_orders,
+        res_data = {
+            'today_orders': dashboard_agg['today_orders_count'] or 0,
+            'today_revenue': float(dashboard_agg['today_revenue'] or 0),
+            'pending_orders': dashboard_agg['pending_count'] or 0,
+            'processing_orders': dashboard_agg['processing_count'] or 0,
             'low_stock_count': low_stock_count,
-            'monthly_revenue': float(monthly_revenue),
-            'monthly_orders': monthly_orders.count(),
+            'monthly_revenue': float(dashboard_agg['monthly_revenue'] or 0),
+            'monthly_orders': dashboard_agg['monthly_orders_count'] or 0,
             'has_unpaid_overdue': has_unpaid_overdue,
             'is_restricted': is_restricted
-        })
+        }
+        
+        # Save to Redis for 5 minutes
+        cache.set(cache_key, res_data, 300)
+        return Response(res_data)
 
 class OrderListView(PartnerBaseView, APIView):
     def get(self, request):
@@ -402,6 +411,13 @@ class RevenueAnalyticsView(PartnerBaseView, APIView):
             return Response([], status=status.HTTP_403_FORBIDDEN)
         range_param = request.query_params.get('range', '7d')
         
+        # 🛡️ Redis Server-Side Caching (15 Minutes for analytics)
+        from django.core.cache import cache
+        cache_key = f"revenue_analytics_{store.id}_{range_param}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return Response(cached_data)
+
         days = 7
         if range_param == '30d': days = 30
         elif range_param == '90d': days = 90
@@ -428,6 +444,8 @@ class RevenueAnalyticsView(PartnerBaseView, APIView):
                 'orders': item['orders']
             })
             
+        # Cache for 15 minutes (900 seconds)
+        cache.set(cache_key, results, 900)
         return Response(results)
 
 class TopProductsAnalyticsView(PartnerBaseView, APIView):
