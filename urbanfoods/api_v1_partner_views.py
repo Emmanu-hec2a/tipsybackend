@@ -663,8 +663,9 @@ class RevenueSharingView(PartnerBaseView, APIView):
             f"Week: {stat.week_start} to {stat.week_end}\n"
             f"<i>Please verify and approve in Admin panel.</i>"
         )
-        # We'll use the platform admin chat or similar
-        admin_chat_id = "5191834221" 
+        # Use configured Admin Chat ID or fallback to legacy
+        from django.conf import settings
+        admin_chat_id = getattr(settings, 'TELEGRAM_ADMIN_CHAT_ID', None) or "5191834221"
         send_telegram_notification(admin_chat_id, msg, bot_type='admin')
         
         return Response({'status': 'success', 'message': 'Payment submitted for verification'})
