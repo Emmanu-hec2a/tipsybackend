@@ -382,3 +382,4 @@ media/
 !composer.json
 !package.json
 !package-lock.json
+!railway.json
