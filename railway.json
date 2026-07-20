@@ -1,0 +1,29 @@
+{
+  "$schema": "https://railway.app/standard-schema.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "nixpacksPlan": {
+      "phases": {
+        "setup": {
+          "nixPkgs": [
+            "python313",
+            "freetype",
+            "libjpeg",
+            "zlib",
+            "pkg-config"
+          ],
+          "aptPkgs": [
+            "libfreetype6-dev",
+            "libjpeg-dev",
+            "libwebp-dev",
+            "zlib1g-dev"
+          ]
+        }
+      }
+    }
+  },
+  "deploy": {
+    "startCommand": "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}
