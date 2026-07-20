@@ -123,8 +123,15 @@ class OrderListView(PartnerBaseView, APIView):
             orders = orders.filter(status=status_filter)
             
         orders = orders.order_by('-created_at')
-        serializer = OrderSerializer(orders, many=True)
-        return Response(serializer.data)
+
+        # Implement Pagination
+        from rest_framework.pagination import PageNumberPagination
+        paginator = PageNumberPagination()
+        paginator.page_size = 15  # Orders per page
+        
+        result_page = paginator.paginate_queryset(orders, request)
+        serializer = OrderSerializer(result_page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
 class OrderDetailView(PartnerBaseView, APIView):
     def get(self, request, pk):

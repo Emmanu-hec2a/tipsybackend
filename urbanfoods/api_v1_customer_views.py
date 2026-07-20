@@ -271,7 +271,8 @@ class OrderChatMessagesView(generics.ListCreateAPIView):
             raise permissions.PermissionDenied("You are not authorized to message on this order.")
 
         # Security: If no rider is assigned, customer cannot message
-        if not order.assigned_rider and self.request.user.role == 'customer':
+        # Use simple presence check for assigned_rider
+        if order.assigned_rider is None and self.request.user.role == 'customer':
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'error': 'No rider assigned to this order yet.'})
 

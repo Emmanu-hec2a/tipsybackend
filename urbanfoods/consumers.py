@@ -79,7 +79,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             order = Order.objects.get(id=self.order_id)
             
             # Security: If no rider is assigned, customer cannot message
-            if not order.assigned_rider and self.user.role == 'customer':
+            if order.assigned_rider is None and self.user.role == 'customer':
                 return {'error': 'No rider assigned to this order yet.'}
 
             msg = ChatMessage.objects.create(
