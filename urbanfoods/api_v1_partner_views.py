@@ -114,25 +114,16 @@ class OrderListView(PartnerBaseView, APIView):
         store = self.get_store(request)
         if not store:
             return Response([], status=status.HTTP_403_FORBIDDEN)
-        
+
         status_filter = request.query_params.get('status')
-        # Exclude orders that are still awaiting payment
         orders = Order.objects.filter(store=store).exclude(status='payment_pending')
-        
+
         if status_filter:
             orders = orders.filter(status=status_filter)
-            
+
         orders = orders.order_by('-created_at')
-
-        # Implement Pagination
-        from rest_framework.pagination import PageNumberPagination
-        paginator = PageNumberPagination()
-        paginator.page_size = 15  # Orders per page
-        
-        result_page = paginator.paginate_queryset(orders, request)
-        serializer = OrderSerializer(result_page, many=True)
-        return paginator.get_paginated_response(serializer.data)
-
+        serializer = OrderSerializer(orders[:10], many=True)
+        return Response(serializer.data)
 class OrderDetailView(PartnerBaseView, APIView):
     def get(self, request, pk):
         store = self.get_store(request)
