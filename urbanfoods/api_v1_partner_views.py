@@ -72,6 +72,7 @@ class DashboardStatsView(PartnerBaseView, APIView):
         today = timezone.localdate()
         start_of_day = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.min.time()))
         end_of_day = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.max.time()))
+        start_of_month = timezone.make_aware(timezone.datetime.combine(today.replace(day=1), timezone.datetime.min.time()))
         
         # 1. Dashboard Aggregation (Combine multiple counts/sums into one query)
         dashboard_agg = Order.objects.filter(store=store).aggregate(

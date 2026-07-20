@@ -27,7 +27,7 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-SITE_URL = os.environ.get('SITE_URL', 'https://tipsytheoryy.com')
+SITE_URL = os.environ.get('SITE_URL', 'https://api.tipsytheoryy.com')
 
 ALLOWED_HOSTS = ['*']
 
