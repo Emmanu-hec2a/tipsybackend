@@ -1,20 +1,25 @@
 {
+  "$schema": "https://railway.app/standard-schema.json",
   "build": {
-    "nixPkgs": [
-      "python312",
-      "gcc",
-      "pkg-config",
-      "freetype",
-      "libjpeg",
-      "zlib",
-      "postgresql"
-    ],
-    "aptPkgs": [
-      "libfreetype6-dev",
-      "libjpeg-dev",
-      "libwebp-dev",
-      "zlib1g-dev",
-      "libpq-dev"
-    ]
+    "builder": "NIXPACKS"
+  },
+  "phases": {
+    "setup": {
+      "nixPkgs": [
+        "python313",
+        "freetype",
+        "libjpeg",
+        "zlib",
+        "pkg-config",
+        "postgresql",
+        "gcc"
+      ],
+      "aptPkgs": [
+        "libfreetype6",
+        "libfreetype6-dev",
+        "libjpeg-dev",
+        "libpq-dev"
+      ]
+    }
   }
 }
