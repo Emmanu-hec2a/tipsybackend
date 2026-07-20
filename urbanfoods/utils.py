@@ -118,7 +118,6 @@ import json
 # Initialize Firebase Admin
 try:
     if not firebase_admin._apps:
-        # 1. Try environment variable (JSON string) for production/Railway
         service_account_json = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
         
         if service_account_json:
@@ -126,21 +125,25 @@ try:
                 cert_dict = json.loads(service_account_json)
                 cred = credentials.Certificate(cert_dict)
                 firebase_admin.initialize_app(cred)
-                logger.info("Firebase Admin initialized via environment variable")
+                logger.info("FCM: Initialized via environment variable")
             except Exception as e:
-                logger.error(f"Failed to initialize Firebase via env var: {e}")
+                logger.error(f"FCM: Failed to initialize via env var: {e}")
         
-        # 2. Fallback to file for local development
         if not firebase_admin._apps:
             cred_path = os.path.join(settings.BASE_DIR, 'tipsytheoryy-dfe92-firebase-adminsdk-fbsvc-499b77e717.json')
             if os.path.exists(cred_path):
-                cred = credentials.Certificate(cred_path)
-                firebase_admin.initialize_app(cred)
-                logger.info("Firebase Admin initialized via local JSON file")
+                try:
+                    cred = credentials.Certificate(cred_path)
+                    firebase_admin.initialize_app(cred)
+                    logger.info(f"FCM: Initialized via local file: {cred_path}")
+                except Exception as e:
+                    logger.error(f"FCM: Failed to initialize via file: {e}")
             else:
-                logger.warning(f"Firebase credentials not found at {cred_path} or FIREBASE_SERVICE_ACCOUNT_JSON env var")
+                logger.warning(f"FCM: No credentials found. Notifications will be disabled.")
+    else:
+        logger.info("FCM: Already initialized")
 except Exception as e:
-    logger.error(f"Firebase Admin initialization failed: {e}")
+    logger.error(f"FCM: Unexpected initialization failure: {e}")
 
 def send_fcm_notification(user, title, body, data=None):
     """Send FCM push notification to a specific user"""
@@ -350,8 +353,8 @@ def update_weekly_revenue_share(order):
     )
 
     # Update totals
-    stat.total_liquor_sales += liquor_total
-    stat.partner_share_40 += (liquor_total * Decimal('0.40'))
+    stat.total_liquor_sales = Decimal(str(stat.total_liquor_sales)) + liquor_total
+    stat.partner_share_40 = Decimal(str(stat.partner_share_40)) + (liquor_total * Decimal('0.40'))
     stat.save()
 
 def notify_new_order(order):

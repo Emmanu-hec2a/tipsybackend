@@ -1257,7 +1257,29 @@ class SaveFCMTokenView(APIView):
             return Response({'error': 'Token required'}, status=status.HTTP_400_BAD_REQUEST)
         request.user.fcm_token = token
         request.user.save()
+        logger.info(f"FCM Token updated for user {request.user.username}")
         return Response({'status': 'ok'})
+
+class TestFCMNotificationView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        if not request.user.is_staff:
+            return Response({'error': 'Admin only'}, status=status.HTTP_403_FORBIDDEN)
+        
+        target_username = request.data.get('username')
+        title = request.data.get('title', 'Test Notification')
+        body = request.data.get('body', 'This is a test notification from TipsyTheoryy')
+        
+        try:
+            from .models import User
+            from .utils import send_fcm_notification
+            user = User.objects.get(username=target_username)
+            success = send_fcm_notification(user, title, body, {'type': 'test'})
+            return Response({'status': 'sent' if success else 'failed', 'token_exists': bool(user.fcm_token)})
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # ==================== API v1 AUTH & PERMISSIONS ====================
 
