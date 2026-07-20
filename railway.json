@@ -6,20 +6,12 @@
       "phases": {
         "setup": {
           "nixPkgs": [
-            "python313",
+            "python312",
             "freetype",
             "libjpeg",
             "zlib",
             "pkg-config",
-            "mysql80"
-          ],
-          "aptPkgs": [
-            "libfreetype6-dev",
-            "libjpeg-dev",
-            "libwebp-dev",
-            "zlib1g-dev",
-            "default-libmysqlclient-dev",
-            "build-essential"
+            "gcc"
           ]
         }
       }
