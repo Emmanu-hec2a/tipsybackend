@@ -6,7 +6,6 @@ from django.shortcuts import get_object_or_404
 from .models import Store, User, Order, WeeklyRevenueStat
 from .api_v1_serializers import StoreSerializer, UserSerializer, OrderSerializer
 from .permissions import IsSuperAdmin
-from .utils import send_telegram_notification
 
 class SuperAdminBaseView:
     permission_classes = [IsSuperAdmin]
@@ -45,7 +44,8 @@ class PartnerApproveView(SuperAdminBaseView, APIView):
             )
             
             if partner.telegram_chat_id:
-                send_telegram_notification(
+                from .tasks import send_telegram_notification_task
+                send_telegram_notification_task.delay(
                     partner.telegram_chat_id,
                     f"🎉 <b>Approved!</b>\nYour store <b>{store.name}</b> is now live on TipsyTheoryy."
                 )
@@ -122,7 +122,8 @@ class ApproveRevenuePayoutView(SuperAdminBaseView, APIView):
         stat.save()
         
         if stat.store.owner.telegram_chat_id:
-            send_telegram_notification(
+            from .tasks import send_telegram_notification_task
+            send_telegram_notification_task.delay(
                 stat.store.owner.telegram_chat_id,
                 f"✅ <b>Revenue Payout Approved!</b>\nYour payment for week <b>{stat.week_start}</b> has been verified. Dashboard access restored.",
                 bot_type='admin' # Verification results still come from Admin bot

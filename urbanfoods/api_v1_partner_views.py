@@ -210,6 +210,12 @@ class MenuItemViewSet(viewsets.ModelViewSet):
             logger.error(f"Validation Errors (POST): {serializer.errors}")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         self.perform_create(serializer)
+        
+        # Trigger New Arrival Notification if toggled
+        if serializer.instance.is_new_arrival and serializer.instance.store_type == 'liquor':
+            from .tasks import notify_new_arrival_task
+            notify_new_arrival_task.delay(serializer.instance.id)
+
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def perform_update(self, serializer):
@@ -263,7 +269,13 @@ class PromotionViewSet(viewsets.ModelViewSet):
             return Promotion.objects.none()
 
     def perform_create(self, serializer):
-        serializer.save(store=self.request.user.store)
+        # 🛡️ Plan Guard: Only Pro stores can create promotions
+        store = self.request.user.store
+        if store.plan != 'pro':
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("The Promotions feature requires a Pro Plan upgrade.")
+            
+        serializer.save(store=store)
 
 class InventoryStatsView(PartnerBaseView, APIView):
     def get(self, request):
@@ -358,12 +370,29 @@ class AnalyticsSummaryView(PartnerBaseView, APIView):
         pending_orders = Order.objects.filter(store=store, status__in=['pending', 'confirmed', 'assigned', 'picked_up', 'arrived']).count()
         cancelled_orders = Order.objects.filter(store=store, status='cancelled').count()
 
+        # New vs Returning Customers (Pro Feature)
+        customer_order_counts = Order.objects.filter(store=store, payment_status='paid') \
+            .values('user_id') \
+            .annotate(order_count=Count('id'))
+        
+        total_customers = customer_order_counts.count()
+        returning_customers = sum(1 for c in customer_order_counts if c['order_count'] > 1)
+        new_customers = total_customers - returning_customers
+        
+        returning_percent = round((returning_customers / total_customers * 100), 1) if total_customers > 0 else 0
+        new_percent = 100 - returning_percent if total_customers > 0 else 0
+
         return Response({
             'total_revenue': float(total_revenue),
             'total_orders': total_orders,
             'completed_orders': completed_orders,
             'pending_orders': pending_orders,
-            'cancelled_orders': cancelled_orders
+            'cancelled_orders': cancelled_orders,
+            'demographics': {
+                'new_percent': new_percent,
+                'returning_percent': returning_percent,
+                'total_customers': total_customers
+            }
         })
 
 class RevenueAnalyticsView(PartnerBaseView, APIView):
@@ -654,7 +683,6 @@ class RevenueSharingView(PartnerBaseView, APIView):
         stat.save()
         
         # 🛡️ Notify Admin of new payout to verify
-        from .utils import send_telegram_notification
         msg = (
             f"💰 <b>New Revenue Payout Submission</b>\n"
             f"Store: {store.name}\n"
@@ -666,7 +694,8 @@ class RevenueSharingView(PartnerBaseView, APIView):
         # Use configured Admin Chat ID or fallback to legacy
         from django.conf import settings
         admin_chat_id = getattr(settings, 'TELEGRAM_ADMIN_CHAT_ID', None) or "5191834221"
-        send_telegram_notification(admin_chat_id, msg, bot_type='admin')
+        from .tasks import send_telegram_notification_task
+        send_telegram_notification_task.delay(admin_chat_id, msg, bot_type='admin')
         
         return Response({'status': 'success', 'message': 'Payment submitted for verification'})
 

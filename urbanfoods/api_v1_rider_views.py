@@ -9,7 +9,6 @@ import json
 from .models import Order, RiderEarning, User
 from .api_v1_serializers import OrderSerializer, RiderEarningSerializer, RiderProfileSerializer
 from .permissions import IsRider
-from .utils import send_telegram_notification
 
 VALID_TRANSITIONS = {
     'assigned': ['picked_up'],
@@ -107,7 +106,8 @@ class RiderOrderStatusView(APIView):
             
             # Notify store
             if order.store and order.store.telegram_chat_id:
-                send_telegram_notification(
+                from .tasks import send_telegram_notification_task
+                send_telegram_notification_task.delay(
                     order.store.telegram_chat_id,
                     f"✅ <b>Order Delivered!</b>\nOrder: #{order.order_number}\nBy Rider: {request.user.get_full_name() or request.user.username}"
                 )

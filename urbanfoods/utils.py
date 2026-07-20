@@ -418,10 +418,12 @@ def notify_new_order(order):
 
         # Send to store specific chat if configured
         if order.store and order.store.telegram_chat_id:
-            send_telegram_notification(order.store.telegram_chat_id, message)
+            from .tasks import send_telegram_notification_task
+            send_telegram_notification_task.delay(order.store.telegram_chat_id, message)
 
         # Also send to global admins
-        return send_telegram_message(message, buttons=buttons)
+        from .tasks import send_telegram_message_task
+        return send_telegram_message_task.delay(message, buttons=buttons)
 
     except Exception as e:
         logger.error(f"Error creating order notification: {e}")
@@ -451,9 +453,11 @@ Status: Ready for delivery 🚀
         )
 
     if order.store and order.store.telegram_chat_id:
-        send_telegram_notification(order.store.telegram_chat_id, message)
+        from .tasks import send_telegram_notification_task
+        send_telegram_notification_task.delay(order.store.telegram_chat_id, message)
 
-    return send_telegram_message(message)
+    from .tasks import send_telegram_message_task
+    return send_telegram_message_task.delay(message)
 
 
 def notify_order_delivered(order):
@@ -479,9 +483,11 @@ Status: Completed ✅
         )
 
     if order.store and order.store.telegram_chat_id:
-        send_telegram_notification(order.store.telegram_chat_id, message)
+        from .tasks import send_telegram_notification_task
+        send_telegram_notification_task.delay(order.store.telegram_chat_id, message)
 
-    return send_telegram_message(message)
+    from .tasks import send_telegram_message_task
+    return send_telegram_message_task.delay(message)
 
 def notify_low_stock(product):
     """Send Telegram alert for a single low stock product"""
@@ -503,9 +509,11 @@ Restock soon!
 
     # Send to store specific chat if available
     if product.store and product.store.telegram_chat_id:
-        send_telegram_notification(product.store.telegram_chat_id, message)
+        from .tasks import send_telegram_notification_task
+        send_telegram_notification_task.delay(product.store.telegram_chat_id, message)
 
-    return send_telegram_message(message, buttons=buttons)
+    from .tasks import send_telegram_message_task
+    return send_telegram_message_task.delay(message, buttons=buttons)
 
 
 def notify_rider_assigned(order, rider):
@@ -538,7 +546,8 @@ Please head to <b>{order.store.name}</b> to pick up.
     )
     
     if rider.telegram_chat_id:
-        return send_telegram_notification(rider.telegram_chat_id, message)
+        from .tasks import send_telegram_notification_task
+        return send_telegram_notification_task.delay(rider.telegram_chat_id, message)
     return True
 
 def notify_superadmin_new_partner(user):
@@ -563,7 +572,8 @@ Login to admin panel to approve.
     """.strip()
     
     for chat_id in chat_ids:
-        send_telegram_notification(chat_id, message)
+        from .tasks import send_telegram_notification_task
+        send_telegram_notification_task.delay(chat_id, message)
     return True
 
 def notify_partner_approved(user):
@@ -580,7 +590,8 @@ Login to your dashboard to set up your store:
     """.strip()
     
     if user.telegram_chat_id:
-        send_telegram_notification(user.telegram_chat_id, message)
+        from .tasks import send_telegram_notification_task
+        send_telegram_notification_task.delay(user.telegram_chat_id, message)
     # SMS could also be triggered here if configured
     return True
 

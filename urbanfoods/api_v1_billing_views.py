@@ -7,7 +7,6 @@ from datetime import date, timedelta
 from django.conf import settings
 from .models import Store, SubscriptionPayment, Order
 from .billing_utils import SubscriptionBilling
-from .utils import send_telegram_notification
 import json
 import logging
 
@@ -62,7 +61,8 @@ def subscription_callback(request):
             )
             
             if store.telegram_chat_id:
-                send_telegram_notification(
+                from .tasks import send_telegram_notification_task
+                send_telegram_notification_task.delay(
                     store.telegram_chat_id, 
                     f"✅ *Subscription Renewed*\nYour store *{store.name}* is now active until {store.subscription_expires}."
                 )
@@ -73,7 +73,8 @@ def subscription_callback(request):
                 status='failed'
             )
             if store.telegram_chat_id:
-                send_telegram_notification(
+                from .tasks import send_telegram_notification_task
+                send_telegram_notification_task.delay(
                     store.telegram_chat_id, 
                     "❌ *Subscription Payment Failed*\nYour subscription payment for *{store.name}* was not successful. Please try again."
                 )
