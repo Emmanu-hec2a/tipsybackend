@@ -128,6 +128,7 @@ class DashboardStatsView(PartnerBaseView, APIView):
             'has_unpaid_overdue': has_unpaid_overdue,
             'is_restricted': is_restricted,
             'plan': store.plan,
+            'store_id': store.id,
             'business_name': store.shop_name or store.name,
             'logo': request.build_absolute_uri(store.logo.url) if store.logo else None
         }

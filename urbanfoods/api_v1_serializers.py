@@ -115,8 +115,8 @@ class StoreSerializer(serializers.ModelSerializer):
     bank_name = serializers.CharField(source='owner.bank_name', required=False, allow_blank=True)
     bank_account_name = serializers.CharField(source='owner.bank_account_name', required=False, allow_blank=True)
     bank_account_number = serializers.CharField(source='owner.bank_account_number', required=False, allow_blank=True)
-    phone = serializers.CharField(source='owner.phone', required=False, allow_blank=True)
-    email = serializers.EmailField(source='owner.email', required=False, allow_blank=True)
+    phone = serializers.CharField(required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
     address_string = serializers.CharField(source='address', required=False, allow_blank=True)
     
     def validate_phone(self, value):

@@ -67,6 +67,8 @@ class Store(models.Model):
     latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     address = models.TextField(null=True, blank=True)
+    phone = models.CharField(max_length=20, null=True, blank=True)
+    email = models.EmailField(null=True, blank=True)
     delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=200.0)
     delivery_radius_km = models.IntegerField(default=7)
     accepts_wallet_payments = models.BooleanField(default=True)
@@ -337,6 +339,8 @@ class Order(models.Model):
     latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     address = models.TextField(null=True, blank=True)
+    phone = models.CharField(max_length=20, null=True, blank=True)
+    email = models.EmailField(null=True, blank=True)
     address_string = models.CharField(max_length=500, null=True, blank=True)
     google_maps_link = models.CharField(max_length=300, null=True, blank=True)
     assigned_rider = models.ForeignKey(User, null=True, blank=True,
