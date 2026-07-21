@@ -44,6 +44,11 @@ CSRF_TRUSTED_ORIGINS = [
     "https://merchants.tipsytheoryy.com",
 ]
 
+from corsheaders.defaults import default_headers
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-store-id",
+]
+
 # SECURE_SSL_REDIRECT = True
 # SESSION_COOKIE_SECURE = True
 # CSRF_COOKIE_SECURE = True
@@ -341,6 +346,11 @@ CORS_ALLOWED_ORIGINS = [
     "https://tipsytheoryy-merchant.pages.dev",
     "https://api.tipsytheoryy.com",
     "https://merchants.tipsytheoryy.com",
+]
+
+from corsheaders.defaults import default_headers
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-store-id",
 ]
 
 # MPESA Configuration
