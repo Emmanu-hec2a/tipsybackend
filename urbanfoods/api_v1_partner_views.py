@@ -129,7 +129,10 @@ class DashboardStatsView(PartnerBaseView, APIView):
             'monthly_revenue': float((dashboard_agg['monthly_revenue'] or 0) + (dashboard_agg['monthly_wallet_revenue'] or 0)),
             'monthly_orders': dashboard_agg['monthly_orders_count'] or 0,
             'has_unpaid_overdue': has_unpaid_overdue,
-            'is_restricted': is_restricted
+            'is_restricted': is_restricted,
+            'plan': store.plan,
+            'business_name': store.shop_name or store.name,
+            'logo': request.build_absolute_uri(store.logo.url) if store.logo else None
         }
         
         # Save to Redis for 5 minutes
@@ -533,22 +536,37 @@ class SwitchActiveStoreView(PartnerBaseView, APIView):
         try:
             # Security: Ensure the user actually owns this store
             store = Store.objects.get(id=store_id, owner=request.user)
-            # In a real JWT setup, we might just return the new store data 
-            # and the frontend will use this ID for subsequent requests.
-            # For session-based, we might need to update a session variable.
-            # But since we use request.user.store in most views, and owner->store is 1-to-1 usually,
-            # we need to decide if we support multi-store owners.
-            
-            # Implementation Strategy: If owner has multiple stores, 
-            # the frontend sends 'X-Store-ID' header or we store current in session.
-            # For now, let's return the store details so the frontend can update its state.
-            
             return Response({
                 'success': True,
                 'store': StoreSerializer(store, context={'request': request}).data
             })
         except Store.DoesNotExist:
             return Response({'error': 'Store not found or access denied'}, status=403)
+
+class CreateBranchView(PartnerBaseView, APIView):
+    def post(self, request):
+        # 🛡️ Enterprise Guard
+        stats_view = DashboardStatsView()
+        # Mock request to get stats for plan check
+        # Alternatively, check user's primary store plan
+        primary_store = Store.objects.filter(owner=request.user).first()
+        if not primary_store or primary_store.plan not in ['enterprise', 'custom']:
+            return Response({'error': 'Branch creation is an Enterprise feature.'}, status=403)
+
+        data = request.data.copy()
+        data['owner'] = request.user.id
+        # Inherit plan and specific settings from primary store
+        data['plan'] = primary_store.plan
+        data['is_pro'] = True
+        data['parent_store'] = primary_store.id
+        data['is_franchise'] = True
+        
+        serializer = StoreSerializer(data=data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save(owner=request.user, parent_store=primary_store)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class OrderInvoiceView(PartnerBaseView, APIView):
     def get(self, request, pk):
