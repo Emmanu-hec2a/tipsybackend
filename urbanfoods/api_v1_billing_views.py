@@ -100,13 +100,17 @@ class PayNowView(APIView):
             
             # If a new plan is requested, update the store's plan and price temporarily
             # but don't mark it as active yet. The callback will handle the activation.
-            if new_plan and new_plan in ['base', 'pro', 'custom']:
+            if new_plan and new_plan in ['base', 'pro']:
                 store.plan = new_plan
-                # Update price based on plan if necessary
+                # Strict pricing enforcement
                 if new_plan == 'base':
-                    store.plan_price = 5000
+                    store.plan_price = 3000
                 elif new_plan == 'pro':
-                    store.plan_price = 15000
+                    store.plan_price = 5000
+                store.save()
+            elif new_plan == 'custom':
+                # Preserve existing plan_price for 'custom' if set by admin
+                store.plan = 'custom'
                 store.save()
 
             billing = SubscriptionBilling()

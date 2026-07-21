@@ -101,6 +101,11 @@ class Store(models.Model):
     billing_status = models.CharField(max_length=20, choices=[
         ('active', 'Active'), ('grace_period', 'Grace Period'),
         ('suspended', 'Suspended')], default='active')
+    
+    # Enterprise & Commission Logic
+    commission_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0.00, help_text="Custom commission rate for Enterprise partners")
+    is_franchise = models.BooleanField(default=False)
+    parent_store = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='branches')
 
     @property
     def subscription_active(self):

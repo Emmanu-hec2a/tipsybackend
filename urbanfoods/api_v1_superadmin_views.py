@@ -13,6 +13,13 @@ class SuperAdminBaseView:
 class StoreListView(SuperAdminBaseView, APIView):
     def get(self, request):
         stores = Store.objects.all().order_by('-created_at')
+        # Strict pricing synchronization for Admin visibility
+        for s in stores:
+            if s.plan == 'base':
+                s.plan_price = 3000
+            elif s.plan == 'pro':
+                s.plan_price = 5000
+
         serializer = StoreSerializer(stores, many=True)
         return Response(serializer.data)
 

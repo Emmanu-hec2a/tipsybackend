@@ -33,10 +33,24 @@ class PartnerBaseView:
     authentication_classes = [QueryParamJWTAuthentication, authentication.SessionAuthentication]
     
     def get_store(self, request):
+        """
+        Production-Ready Multi-Store Resolution:
+        1. Checks for 'X-Store-ID' header (Mobile/Modern Web)
+        2. Falls back to request.user.store (Legacy/Single Store)
+        3. Validates ownership to prevent cross-tenant access
+        """
+        store_id = request.headers.get('X-Store-ID')
+        
         try:
+            if store_id:
+                # Security: Ensure user owns the requested store
+                return Store.objects.get(id=store_id, owner=request.user)
+            
+            # Fallback to the primary store linked to user
             return request.user.store
-        except Exception:
-            return None
+        except (Store.DoesNotExist, AttributeError):
+            # If no specific store is found/owned, return the first available store owned by user
+            return Store.objects.filter(owner=request.user).first()
 
 class PartnerStatusView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -496,6 +510,46 @@ class StoreSettingsView(PartnerBaseView, APIView):
         logger.error(f"Store Settings Validation Errors: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+class FranchiseBranchesView(PartnerBaseView, APIView):
+    def get(self, request):
+        user = request.user
+        # Find all stores owned by this user
+        stores = Store.objects.filter(owner=user).order_by('name')
+        
+        # If the user owns multiple stores or is marked as franchise
+        data = [{
+            'id': s.id,
+            'name': s.name,
+            'shop_name': s.shop_name,
+            'logo': request.build_absolute_uri(s.logo.url) if s.logo else None,
+            'plan': s.plan
+        } for s in stores]
+        
+        return Response(data)
+
+class SwitchActiveStoreView(PartnerBaseView, APIView):
+    def post(self, request):
+        store_id = request.data.get('store_id')
+        try:
+            # Security: Ensure the user actually owns this store
+            store = Store.objects.get(id=store_id, owner=request.user)
+            # In a real JWT setup, we might just return the new store data 
+            # and the frontend will use this ID for subsequent requests.
+            # For session-based, we might need to update a session variable.
+            # But since we use request.user.store in most views, and owner->store is 1-to-1 usually,
+            # we need to decide if we support multi-store owners.
+            
+            # Implementation Strategy: If owner has multiple stores, 
+            # the frontend sends 'X-Store-ID' header or we store current in session.
+            # For now, let's return the store details so the frontend can update its state.
+            
+            return Response({
+                'success': True,
+                'store': StoreSerializer(store, context={'request': request}).data
+            })
+        except Store.DoesNotExist:
+            return Response({'error': 'Store not found or access denied'}, status=403)
+
 class OrderInvoiceView(PartnerBaseView, APIView):
     def get(self, request, pk):
         store = self.get_store(request)
@@ -583,9 +637,11 @@ class MarketingBlastView(PartnerBaseView, APIView):
         if store.plan != 'pro':
             return Response({'error': 'Marketing Blast is a Pro feature'}, status=403)
             
-        # 1-hour cooling lock check
+        # 1-hour cooling lock check (Bypassed for Enterprise/Franchise partners)
         last_blast = MarketingBlast.objects.filter(store=store).order_by('-created_at').first()
-        if last_blast and (timezone.now() - last_blast.created_at) < timedelta(hours=1):
+        is_enterprise = store.plan == 'enterprise' or store.plan == 'custom'
+        
+        if not is_enterprise and last_blast and (timezone.now() - last_blast.created_at) < timedelta(hours=1):
             remaining = timedelta(hours=1) - (timezone.now() - last_blast.created_at)
             minutes = int(remaining.total_seconds() / 60)
             return Response({
@@ -631,9 +687,11 @@ class MarketingStatsView(PartnerBaseView, APIView):
             'created_at': b.created_at.isoformat()
         } for b in recent_blasts]
 
-        # Calculate cooldown status
+        # Calculate cooldown status (Enterprise bypasses this)
         cooldown_active = False
-        if recent_blasts:
+        is_enterprise = store.plan == 'enterprise' or store.plan == 'custom'
+        
+        if not is_enterprise and recent_blasts:
             time_since_last = timezone.now() - recent_blasts[0].created_at
             cooldown_active = time_since_last < timedelta(hours=1)
 
