@@ -6,6 +6,7 @@ from django.utils import timezone
 from datetime import date, timedelta
 from django.conf import settings
 from .models import Store, SubscriptionPayment, Order
+from .api_v1_partner_views import PartnerStoreMixin
 from .billing_utils import SubscriptionBilling
 import json
 import logging
@@ -84,7 +85,7 @@ def subscription_callback(request):
 
     return Response({'status': 'ok'})
 
-class PayNowView(APIView):
+class PayNowView(PartnerStoreMixin, APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -93,8 +94,8 @@ class PayNowView(APIView):
         new_plan = request.data.get('plan') # 'base', 'pro', or 'custom'
         
         try:
-            # Safely check for store
-            store = getattr(user, 'store', None)
+            # Safely check for store using mixin
+            store = self.get_store(request)
             if not store:
                 return Response({'error': 'No store associated with this account. Please create a store first.'}, status=status.HTTP_400_BAD_REQUEST)
             

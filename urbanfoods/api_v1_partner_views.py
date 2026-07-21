@@ -28,15 +28,12 @@ from django.http import HttpResponse
 
 logger = logging.getLogger(__name__)
 
-class PartnerBaseView:
-    permission_classes = [IsPartner]
-    authentication_classes = [QueryParamJWTAuthentication, authentication.SessionAuthentication]
-    
+class PartnerStoreMixin:
     def get_store(self, request):
         """
         Production-Ready Multi-Store Resolution:
         1. Checks for 'X-Store-ID' header (Mobile/Modern Web)
-        2. Falls back to request.user.store (Legacy/Single Store)
+        2. Falls back to request.user.stores.first() (Legacy/Single Store)
         3. Validates ownership to prevent cross-tenant access
         """
         store_id = request.headers.get('X-Store-ID')
@@ -47,10 +44,14 @@ class PartnerBaseView:
                 return Store.objects.get(id=store_id, owner=request.user)
             
             # Fallback to the primary store linked to user
-            return request.user.store
+            # Since owner is now a ForeignKey, we use .stores manager
+            return request.user.stores.first()
         except (Store.DoesNotExist, AttributeError):
-            # If no specific store is found/owned, return the first available store owned by user
-            return Store.objects.filter(owner=request.user).first()
+            return None
+
+class PartnerBaseView(PartnerStoreMixin):
+    permission_classes = [IsPartner]
+    authentication_classes = [QueryParamJWTAuthentication, authentication.SessionAuthentication]
 
 class PartnerStatusView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -58,11 +59,7 @@ class PartnerStatusView(APIView):
         if request.user.role != 'partner':
             return Response({'error': 'Not a partner account'}, status=403)
         
-        has_store = False
-        try:
-            has_store = hasattr(request.user, 'store')
-        except:
-            pass
+        has_store = request.user.stores.exists()
             
         return Response({
             'is_approved': request.user.is_approved,
@@ -207,16 +204,16 @@ class AssignRiderView(PartnerBaseView, APIView):
         except (Order.DoesNotExist, User.DoesNotExist):
             return Response({'error': 'Order or Rider not found'}, status=status.HTTP_404_NOT_FOUND)
 
-class MenuItemViewSet(viewsets.ModelViewSet):
+class MenuItemViewSet(PartnerStoreMixin, viewsets.ModelViewSet):
     permission_classes = [IsPartner]
     serializer_class = FoodItemSerializer
     parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def get_queryset(self):
-        try:
-            return FoodItem.objects.filter(store=self.request.user.store)
-        except Exception:
-            return FoodItem.objects.none()
+        store = self.get_store(self.request)
+        if store:
+            return FoodItem.objects.filter(store=store)
+        return FoodItem.objects.none()
 
     def perform_create(self, serializer):
         category_name = self.request.data.get('category_name')
@@ -224,7 +221,8 @@ class MenuItemViewSet(viewsets.ModelViewSet):
         if category_name:
             category_fkey = FoodCategory.objects.filter(name__iexact=category_name).first()
         
-        serializer.save(store=self.request.user.store, category_fkey=category_fkey)
+        store = self.get_store(self.request)
+        serializer.save(store=store, category_fkey=category_fkey)
 
     def create(self, request, *args, **kwargs):
         # Log request data for debugging 400 errors
@@ -294,20 +292,20 @@ class CategoryViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return FoodCategory.objects.all()
 
-class PromotionViewSet(viewsets.ModelViewSet):
+class PromotionViewSet(PartnerStoreMixin, viewsets.ModelViewSet):
     permission_classes = [IsPartner]
     serializer_class = PromotionSerializer
 
     def get_queryset(self):
-        try:
-            return Promotion.objects.filter(store=self.request.user.store)
-        except Exception:
-            return Promotion.objects.none()
+        store = self.get_store(self.request)
+        if store:
+            return Promotion.objects.filter(store=store)
+        return Promotion.objects.none()
 
     def perform_create(self, serializer):
         # 🛡️ Plan Guard: Pro or Enterprise stores can create promotions
-        store = self.request.user.store
-        if store.plan not in ['pro', 'enterprise', 'custom']:
+        store = self.get_store(self.request)
+        if not store or store.plan not in ['pro', 'enterprise', 'custom']:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("The Promotions feature requires a Pro Plan upgrade.")
             
@@ -363,18 +361,19 @@ class CustomerListView(PartnerBaseView, APIView):
         serializer = UserSerializer(customers, many=True)
         return Response(serializer.data)
 
-class RiderViewSet(viewsets.ModelViewSet):
+class RiderViewSet(PartnerStoreMixin, viewsets.ModelViewSet):
     permission_classes = [IsPartner]
     serializer_class = UserSerializer
 
     def get_queryset(self):
-        try:
-            return User.objects.filter(assigned_store=self.request.user.store, role='rider')
-        except Exception:
-            return User.objects.none()
+        store = self.get_store(self.request)
+        if store:
+            return User.objects.filter(assigned_store=store, role='rider')
+        return User.objects.none()
 
     def perform_create(self, serializer):
-        serializer.save(role='rider', assigned_store=self.request.user.store, is_approved=True)
+        store = self.get_store(self.request)
+        serializer.save(role='rider', assigned_store=store, is_approved=True)
 
 class ToggleRiderAvailabilityView(PartnerBaseView, APIView):
     def patch(self, request, pk):
@@ -546,25 +545,44 @@ class SwitchActiveStoreView(PartnerBaseView, APIView):
 class CreateBranchView(PartnerBaseView, APIView):
     def post(self, request):
         # 🛡️ Enterprise Guard
-        stats_view = DashboardStatsView()
-        # Mock request to get stats for plan check
-        # Alternatively, check user's primary store plan
         primary_store = Store.objects.filter(owner=request.user).first()
         if not primary_store or primary_store.plan not in ['enterprise', 'custom']:
             return Response({'error': 'Branch creation is an Enterprise feature.'}, status=403)
 
         data = request.data.copy()
-        data['owner'] = request.user.id
+        
+        # Ensure name and address_string are handled correctly for the serializer
+        # Store model expects 'name' and we added 'address' (mapped via address_string in serializer)
+        
         # Inherit plan and specific settings from primary store
         data['plan'] = primary_store.plan
         data['is_pro'] = True
         data['parent_store'] = primary_store.id
         data['is_franchise'] = True
         
+        # Use primary store's branding if not provided
+        if not data.get('logo') and primary_store.logo:
+            # We don't copy the file object easily in a simple API call, 
+            # but the model will handle it if we set it in perform_create or similar.
+            pass
+
         serializer = StoreSerializer(data=data, context={'request': request})
         if serializer.is_valid():
-            serializer.save(owner=request.user, parent_store=primary_store)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            # Explicitly set owner and parent_store to avoid any 500s from OneToOne legacy
+            branch = serializer.save(
+                owner=request.user, 
+                parent_store=primary_store,
+                is_active=True # Branches should be active by default if owner is approved
+            )
+            
+            # Copy logo and cover from primary if new branch didn't provide them
+            if primary_store.logo and not branch.logo:
+                branch.logo = primary_store.logo
+            if primary_store.cover_image and not branch.cover_image:
+                branch.cover_image = primary_store.cover_image
+            branch.save()
+            
+            return Response(StoreSerializer(branch, context={'request': request}).data, status=status.HTTP_201_CREATED)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

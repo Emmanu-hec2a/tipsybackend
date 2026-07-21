@@ -55,7 +55,7 @@ class User(AbstractUser):
         return self.username
 
 class Store(models.Model):
-    owner = models.OneToOneField(User, on_delete=models.CASCADE, related_name='store')
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='stores')
     name = models.CharField(max_length=200)
     is_active = models.BooleanField(default=False, db_index=True)
     is_pro = models.BooleanField(default=False, db_index=True)
@@ -66,6 +66,7 @@ class Store(models.Model):
 
     latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    address = models.TextField(null=True, blank=True)
     delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=200.0)
     delivery_radius_km = models.IntegerField(default=7)
     accepts_wallet_payments = models.BooleanField(default=True)
@@ -335,6 +336,7 @@ class Order(models.Model):
     store = models.ForeignKey(Store, on_delete=models.CASCADE, null=True, blank=True) # Nullable for migration
     latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    address = models.TextField(null=True, blank=True)
     address_string = models.CharField(max_length=500, null=True, blank=True)
     google_maps_link = models.CharField(max_length=300, null=True, blank=True)
     assigned_rider = models.ForeignKey(User, null=True, blank=True,

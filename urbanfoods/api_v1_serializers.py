@@ -117,7 +117,7 @@ class StoreSerializer(serializers.ModelSerializer):
     bank_account_number = serializers.CharField(source='owner.bank_account_number', required=False, allow_blank=True)
     phone = serializers.CharField(source='owner.phone', required=False, allow_blank=True)
     email = serializers.EmailField(source='owner.email', required=False, allow_blank=True)
-    address_string = serializers.CharField(source='owner.business_location', required=False, allow_blank=True)
+    address_string = serializers.CharField(source='address', required=False, allow_blank=True)
     
     def validate_phone(self, value):
         """Clean and validate phone number for Kenya/Daraja."""

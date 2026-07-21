@@ -40,15 +40,18 @@ class PartnerApproveView(SuperAdminBaseView, APIView):
             partner.save()
             
             # Create store if it doesn't exist
-            store, created = Store.objects.get_or_create(
-                owner=partner,
-                defaults={
-                    'name': partner.business_name or f"{partner.username}'s Store",
-                    'is_active': True,
-                    'latitude': 0,
-                    'longitude': 0
-                }
-            )
+            store = partner.stores.first()
+            if not store:
+                store = Store.objects.create(
+                    owner=partner,
+                    name=partner.business_name or f"{partner.username}'s Store",
+                    is_active=True,
+                    latitude=0,
+                    longitude=0
+                )
+            else:
+                store.is_active = True
+                store.save()
             
             if partner.telegram_chat_id:
                 from .tasks import send_telegram_notification_task
@@ -71,10 +74,10 @@ class PartnerSuspendView(SuperAdminBaseView, APIView):
             partner.is_approved = False
             partner.save()
             
-            # Deactivate store
-            if hasattr(partner, 'store'):
-                partner.store.is_active = False
-                partner.store.save()
+            # Deactivate all associated stores
+            for s in partner.stores.all():
+                s.is_active = False
+                s.save()
                 
             return Response({'message': f'Partner {partner.username} suspended'})
         except User.DoesNotExist:
