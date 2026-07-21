@@ -305,9 +305,9 @@ class PromotionViewSet(viewsets.ModelViewSet):
             return Promotion.objects.none()
 
     def perform_create(self, serializer):
-        # 🛡️ Plan Guard: Only Pro stores can create promotions
+        # 🛡️ Plan Guard: Pro or Enterprise stores can create promotions
         store = self.request.user.store
-        if store.plan != 'pro':
+        if store.plan not in ['pro', 'enterprise', 'custom']:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("The Promotions feature requires a Pro Plan upgrade.")
             
@@ -652,7 +652,7 @@ class MarketingBlastView(PartnerBaseView, APIView):
         if not store:
             return Response({'error': 'No store associated'}, status=403)
             
-        if store.plan != 'pro':
+        if store.plan not in ['pro', 'enterprise', 'custom']:
             return Response({'error': 'Marketing Blast is a Pro feature'}, status=403)
             
         # 1-hour cooling lock check (Bypassed for Enterprise/Franchise partners)
