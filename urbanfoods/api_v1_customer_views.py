@@ -484,6 +484,13 @@ class CustomerPlaceOrderView(APIView):
                 if not store:
                     return Response({'error': 'Store not found for items'}, status=status.HTTP_400_BAD_REQUEST)
 
+                # 🛡️ Wallet Accept Check
+                if data.get('use_wallet') and not store.accepts_wallet_payments:
+                    return Response({
+                        'error': 'wallet_not_accepted',
+                        'message': f'{store.name} does not accept Tipsy Wallet payments currently.'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
                 # 🛡️ Distance Radius Enforcement
                 u_lat = data.get('latitude')
                 u_lng = data.get('longitude')
@@ -555,6 +562,23 @@ class CustomerPlaceOrderView(APIView):
                 # Dynamic delivery fee from store
                 delivery_fee = store.delivery_fee
                 total = float(subtotal) + float(delivery_fee) - discount_amount
+                
+                # 👛 Tipsy Wallet Logic
+                wallet_used = 0
+                if data.get('use_wallet') and user.wallet_balance > 0:
+                    available_wallet = float(user.wallet_balance)
+                    if available_wallet >= total:
+                        wallet_used = total
+                        total = 0
+                        user.wallet_balance = available_wallet - wallet_used
+                    else:
+                        wallet_used = available_wallet
+                        total = total - wallet_used
+                        user.wallet_balance = 0
+                    
+                    user.save(update_fields=['wallet_balance'])
+                    logger.info(f"User {user.username} used KSh {wallet_used} from wallet. New balance: {user.wallet_balance}")
+
                 if total < 0: total = 0
 
                 # 🛡️ Tiered Verification Logic
@@ -577,7 +601,8 @@ class CustomerPlaceOrderView(APIView):
                     longitude=data.get('longitude'),
                     address_string=data.get('address_string'),
                     status=initial_status,
-                    payment_status='pending',
+                    wallet_used=wallet_used,
+                    payment_status='paid' if total == 0 else 'pending', # Auto-pay if wallet covered everything
                     payment_method=data.get('payment_method', 'mpesa'),
                     requires_rider_verification=requires_verification
                 )

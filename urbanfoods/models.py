@@ -68,6 +68,7 @@ class Store(models.Model):
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=200.0)
     delivery_radius_km = models.IntegerField(default=7)
+    accepts_wallet_payments = models.BooleanField(default=True)
 
     # Dynamic Fee Overrides (if null, uses SiteSettings)
     base_delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
@@ -367,6 +368,7 @@ class Order(models.Model):
     promo_code = models.CharField(max_length=20, null=True, blank=True)
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=10, decimal_places=2)
+    wallet_used = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)

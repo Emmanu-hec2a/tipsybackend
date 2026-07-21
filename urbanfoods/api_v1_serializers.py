@@ -162,6 +162,7 @@ class StoreSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'shop_name', 'logo', 'cover_image', 'tagline', 'primary_color',
             'rating', 'rating_count', 'delivery_fee', 'dynamic_delivery_fee', 'delivery_radius_km',
+            'accepts_wallet_payments',
             'base_delivery_fee', 'base_distance_km', 'extra_distance_surcharge',
             'avg_delivery_minutes', 'latitude', 'longitude', 'is_pro', 'is_favourite', 
             'distance', 'bank_name', 'bank_account_name', 'bank_account_number',
@@ -456,7 +457,7 @@ class OrderSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'order_number', 'customer_name', 'customer_phone', 'customer_email', 'customer_image',
             'rider_name', 'rider_image', 'status',
-            'payment_status', 'payment_method', 'total', 'latitude', 'longitude', 'address_string',
+            'payment_status', 'payment_method', 'total', 'wallet_used', 'latitude', 'longitude', 'address_string',
             'google_maps_link', 'created_at', 'items', 'delivery_fee', 'tip_amount',
             'promo_code', 'discount_amount',
             'store_name', 'store_latitude', 'store_longitude',

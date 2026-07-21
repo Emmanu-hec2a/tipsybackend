@@ -78,8 +78,10 @@ class DashboardStatsView(PartnerBaseView, APIView):
         dashboard_agg = Order.objects.filter(store=store).aggregate(
             today_orders_count=Count('id', filter=Q(created_at__range=(start_of_day, end_of_day))),
             today_revenue=Sum('total', filter=Q(created_at__range=(start_of_day, end_of_day), payment_status='paid')),
+            today_wallet_revenue=Sum('wallet_used', filter=Q(created_at__range=(start_of_day, end_of_day), payment_status='paid')),
             monthly_orders_count=Count('id', filter=Q(created_at__gte=start_of_month)),
             monthly_revenue=Sum('total', filter=Q(created_at__gte=start_of_month, payment_status='paid')),
+            monthly_wallet_revenue=Sum('wallet_used', filter=Q(created_at__gte=start_of_month, payment_status='paid')),
             pending_count=Count('id', filter=Q(status='pending')),
             processing_count=Count('id', filter=Q(status='processing'))
         )
@@ -105,11 +107,12 @@ class DashboardStatsView(PartnerBaseView, APIView):
 
         res_data = {
             'today_orders': dashboard_agg['today_orders_count'] or 0,
-            'today_revenue': float(dashboard_agg['today_revenue'] or 0),
+            'today_revenue': float((dashboard_agg['today_revenue'] or 0) + (dashboard_agg['today_wallet_revenue'] or 0)),
+            'today_wallet_share': float(dashboard_agg['today_wallet_revenue'] or 0),
             'pending_orders': dashboard_agg['pending_count'] or 0,
             'processing_orders': dashboard_agg['processing_count'] or 0,
             'low_stock_count': low_stock_count,
-            'monthly_revenue': float(dashboard_agg['monthly_revenue'] or 0),
+            'monthly_revenue': float((dashboard_agg['monthly_revenue'] or 0) + (dashboard_agg['monthly_wallet_revenue'] or 0)),
             'monthly_orders': dashboard_agg['monthly_orders_count'] or 0,
             'has_unpaid_overdue': has_unpaid_overdue,
             'is_restricted': is_restricted
@@ -167,8 +170,14 @@ class AssignRiderView(PartnerBaseView, APIView):
             return Response({'error': 'No store associated'}, status=status.HTTP_403_FORBIDDEN)
         try:
             order = Order.objects.get(pk=pk, store=store)
+            
+            # 🛡️ Guard: Prevent re-assignment if order is already in progress
+            if order.status in ['picked_up', 'arrived', 'delivered']:
+                return Response({'error': f'Cannot re-assign order that is already {order.status}.'}, status=400)
+
             rider_id = request.data.get('rider_id')
-            rider = User.objects.get(id=rider_id, role='rider', assigned_store=store)
+            # 🌍 Open Pool: Get any available rider (regardless of assigned_store)
+            rider = User.objects.get(id=rider_id, role='rider', is_available=True)
             
             order.assigned_rider = rider
             order.status = 'assigned'
@@ -523,7 +532,7 @@ class NearbyRidersView(PartnerBaseView, APIView):
             
         radius = float(store.delivery_radius_km)
         
-        # Get all riders assigned to this store who are available
+        # 🌍 Open Pool: Get all riders who are available, anywhere
         riders = User.objects.filter(role='rider', is_available=True)
         
         nearby_riders = []
@@ -534,24 +543,33 @@ class NearbyRidersView(PartnerBaseView, APIView):
             ).order_by('-created_at').first()
             
             if last_ping:
+                from .utils import haversine_distance_km
                 dist = haversine_distance_km(
                     float(store.latitude), float(store.longitude),
                     float(last_ping.latitude), float(last_ping.longitude)
                 )
                 
                 if dist <= radius:
+                    # 🏅 Ranking Intelligence:
+                    # Score = (Rating * 10) + (Deliveries / 10) - (Distance * 5)
+                    score = (float(rider.avg_rating) * 10) + (rider.total_deliveries / 10.0) - (dist * 5)
+                    
                     nearby_riders.append({
                         'id': rider.id,
-                        'username': rider.username,
+                        'username': rider.get_full_name() or rider.username,
                         'phone': rider.phone,
                         'avg_rating': float(rider.avg_rating),
+                        'total_deliveries': rider.total_deliveries,
                         'distance_km': round(dist, 2),
-                        'last_seen': last_ping.created_at
+                        'last_seen': last_ping.created_at,
+                        'rank_score': score
                     })
         
-        # Sort by distance
-        nearby_riders.sort(key=lambda x: x['distance_km'])
-        return Response(nearby_riders)
+        # 🏆 Rank: Highest score first (Best riders nearby)
+        nearby_riders.sort(key=lambda x: x['rank_score'], reverse=True)
+        
+        # Ensure at least a few results are visible if they exist
+        return Response(nearby_riders[:10])
 
 class MarketingBlastView(PartnerBaseView, APIView):
     throttle_classes = [ScopedRateThrottle]
