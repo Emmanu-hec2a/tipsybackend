@@ -196,11 +196,11 @@ class CustomerProductListView(generics.ListAPIView):
             partner_share_40__gt=0
         ).values('store').annotate(unpaid_count=Count('id')).filter(unpaid_count__gte=2).values_list('store_id', flat=True)
 
+        # Base filter: products from active stores with valid subscriptions (or inherited franchise validity)
+        from django.db.models import Q
         queryset = FoodItem.objects.filter(
-            is_active=True,
-            store__is_active=True,
-            store__subscription_expires__gte=date.today(),
-            store__billing_status='active'
+            Q(is_active=True, store__is_active=True, store__billing_status='active', store__subscription_expires__gte=date.today()) |
+            Q(is_active=True, store__is_active=True, store__is_franchise=True, store__parent_store__billing_status='active', store__parent_store__subscription_expires__gte=date.today())
         ).exclude(store_id__in=restricted_store_ids).order_by('-store__is_pro', 'name')
         
         store_id = self.request.query_params.get('store_id')
