@@ -112,13 +112,37 @@ class Store(models.Model):
 
     @property
     def subscription_active(self):
-        """Returns True if subscription is active and not expired."""
+        """Returns True if subscription is active and not expired. Franchise branches inherit from parent."""
+        if self.is_franchise and self.parent_store:
+            return self.parent_store.subscription_active
+            
         if self.billing_status == 'suspended':
             return False
         if not self.subscription_expires:
             return False
         from datetime import date
         return self.subscription_expires >= date.today()
+
+    @property
+    def effective_plan(self):
+        """Inherit plan from parent if franchise."""
+        if self.is_franchise and self.parent_store:
+            return self.parent_store.plan
+        return self.plan
+
+    @property
+    def effective_billing_status(self):
+        """Inherit billing status from parent if franchise."""
+        if self.is_franchise and self.parent_store:
+            return self.parent_store.billing_status
+        return self.billing_status
+
+    @property
+    def effective_subscription_expires(self):
+        """Inherit expiry from parent if franchise."""
+        if self.is_franchise and self.parent_store:
+            return self.parent_store.subscription_expires
+        return self.subscription_expires
     last_payment_date = models.DateField(null=True, blank=True)
     last_expiry_reminder_sent = models.DateField(null=True, blank=True)
 

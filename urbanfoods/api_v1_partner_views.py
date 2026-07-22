@@ -127,7 +127,7 @@ class DashboardStatsView(PartnerBaseView, APIView):
             'monthly_orders': dashboard_agg['monthly_orders_count'] or 0,
             'has_unpaid_overdue': has_unpaid_overdue,
             'is_restricted': is_restricted,
-            'plan': store.plan,
+            'plan': store.effective_plan,
             'store_id': store.id,
             'business_name': store.shop_name or store.name,
             'logo': request.build_absolute_uri(store.logo.url) if store.logo else None
@@ -306,7 +306,7 @@ class PromotionViewSet(PartnerStoreMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         # 🛡️ Plan Guard: Pro or Enterprise stores can create promotions
         store = self.get_store(self.request)
-        if not store or store.plan not in ['pro', 'enterprise', 'custom']:
+        if not store or store.effective_plan not in ['pro', 'enterprise', 'custom']:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("The Promotions feature requires a Pro Plan upgrade.")
             
@@ -525,7 +525,7 @@ class FranchiseBranchesView(PartnerBaseView, APIView):
             'name': s.name,
             'shop_name': s.shop_name,
             'logo': request.build_absolute_uri(s.logo.url) if s.logo else None,
-            'plan': s.plan
+            'plan': s.effective_plan
         } for s in stores]
         
         return Response(data)
@@ -674,12 +674,12 @@ class MarketingBlastView(PartnerBaseView, APIView):
         if not store:
             return Response({'error': 'No store associated'}, status=403)
             
-        if store.plan not in ['pro', 'enterprise', 'custom']:
+        if store.effective_plan not in ['pro', 'enterprise', 'custom']:
             return Response({'error': 'Marketing Blast is a Pro feature'}, status=403)
             
         # 1-hour cooling lock check (Bypassed for Enterprise/Franchise partners)
         last_blast = MarketingBlast.objects.filter(store=store).order_by('-created_at').first()
-        is_enterprise = store.plan == 'enterprise' or store.plan == 'custom'
+        is_enterprise = store.effective_plan == 'enterprise' or store.effective_plan == 'custom'
         
         if not is_enterprise and last_blast and (timezone.now() - last_blast.created_at) < timedelta(hours=1):
             remaining = timedelta(hours=1) - (timezone.now() - last_blast.created_at)
@@ -729,7 +729,7 @@ class MarketingStatsView(PartnerBaseView, APIView):
 
         # Calculate cooldown status (Enterprise bypasses this)
         cooldown_active = False
-        is_enterprise = store.plan == 'enterprise' or store.plan == 'custom'
+        is_enterprise = store.effective_plan == 'enterprise' or store.effective_plan == 'custom'
         
         if not is_enterprise and recent_blasts:
             time_since_last = timezone.now() - recent_blasts[0].created_at

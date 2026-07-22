@@ -260,14 +260,22 @@ class StoreSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
     def to_representation(self, instance):
-        """Fallback to owner's info if branch-specific fields are empty"""
+        """Fallback to owner's info and parent's plan if franchise."""
         data = super().to_representation(instance)
+        
+        # Branch Info Inheritance
         if not data.get('phone') and instance.owner:
             data['phone'] = instance.owner.phone
         if not data.get('email') and instance.owner:
             data['email'] = instance.owner.email
         if not data.get('address_string') and instance.owner:
             data['address_string'] = instance.owner.business_location
+            
+        # Plan & Subscription Inheritance (Crucial for Dashboard/Billing)
+        data['plan'] = instance.effective_plan
+        data['billing_status'] = instance.effective_billing_status
+        data['subscription_expires'] = instance.effective_subscription_expires
+
         return data
 
 class FoodCategorySerializer(serializers.ModelSerializer):
