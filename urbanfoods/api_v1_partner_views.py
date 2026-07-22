@@ -569,11 +569,14 @@ class CreateBranchView(PartnerBaseView, APIView):
 
         serializer = StoreSerializer(data=data, context={'request': request})
         if serializer.is_valid():
-            # Explicitly set owner and parent_store to avoid any 500s from OneToOne legacy
+            # Explicitly set owner, plan and franchise flags to bypass serializer read_only restrictions
             branch = serializer.save(
                 owner=request.user, 
                 parent_store=primary_store,
-                is_active=True # Branches should be active by default if owner is approved
+                plan=primary_store.plan,
+                is_pro=True,
+                is_franchise=True,
+                is_active=True
             )
             
             # Copy logo and cover from primary if new branch didn't provide them
