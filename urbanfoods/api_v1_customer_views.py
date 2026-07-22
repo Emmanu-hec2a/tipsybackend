@@ -58,12 +58,13 @@ class CustomerStoreListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        # Base queryset: active stores with valid subscriptions, prioritize Pro stores first
+        # Base queryset: active stores with valid subscriptions
+        # Franchise branches inherit validity from their parent store
+        from django.db.models import Q
         queryset = Store.objects.filter(
-            is_active=True, 
-            subscription_expires__gte=date.today(),
-            billing_status='active'
-        ).select_related('owner')
+            Q(is_active=True, billing_status='active', subscription_expires__gte=date.today()) |
+            Q(is_active=True, is_franchise=True, parent_store__billing_status='active', parent_store__subscription_expires__gte=date.today())
+        ).select_related('owner', 'parent_store')
         
         # Annotate is_favourite if user is authenticated
         user = self.request.user
@@ -120,10 +121,10 @@ class CustomerStoreDetailView(generics.RetrieveAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        from django.db.models import Q
         return Store.objects.filter(
-            is_active=True, 
-            subscription_expires__gte=date.today(),
-            billing_status='active'
+            Q(is_active=True, billing_status='active', subscription_expires__gte=date.today()) |
+            Q(is_active=True, is_franchise=True, parent_store__billing_status='active', parent_store__subscription_expires__gte=date.today())
         )
 
 @method_decorator(cache_page(60*5), name='dispatch')

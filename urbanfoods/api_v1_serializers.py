@@ -259,6 +259,17 @@ class StoreSerializer(serializers.ModelSerializer):
         # Update store fields
         return super().update(instance, validated_data)
 
+    def to_representation(self, instance):
+        """Fallback to owner's info if branch-specific fields are empty"""
+        data = super().to_representation(instance)
+        if not data.get('phone') and instance.owner:
+            data['phone'] = instance.owner.phone
+        if not data.get('email') and instance.owner:
+            data['email'] = instance.owner.email
+        if not data.get('address_string') and instance.owner:
+            data['address_string'] = instance.owner.business_location
+        return data
+
 class FoodCategorySerializer(serializers.ModelSerializer):
     def validate_phone(self, value):
         """Clean and validate phone number for Kenya/Daraja."""
