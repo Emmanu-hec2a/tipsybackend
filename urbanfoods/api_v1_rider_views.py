@@ -177,9 +177,37 @@ class RiderProfileView(APIView):
         return Response(serializer.data)
         
     def patch(self, request):
-        # Explicitly handle is_available for status toggle
+        # 🛡️ Mandatory Location Gate: To go online, rider MUST provide GPS
         if 'is_available' in request.data:
-            request.user.is_available = request.data['is_available']
+            is_available = request.data['is_available']
+            
+            if is_available:
+                lat = request.data.get('latitude')
+                lng = request.data.get('longitude')
+                
+                if not lat or not lng:
+                    return Response({
+                        'error': 'location_required',
+                        'message': 'High-accuracy GPS is required to accept deliveries.'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                # Instantly cache position to make rider visible to merchants
+                rider_pos_key = f"rider_pos_{request.user.id}"
+                cache.set(rider_pos_key, {'lat': lat, 'lng': lng}, timeout=300)
+            else:
+                # 🛡️ Safety Guard: Prevent going offline if they have an active order
+                active_delivery = Order.objects.filter(
+                    assigned_rider=request.user, 
+                    status__in=['assigned', 'picked_up', 'arrived']
+                ).exists()
+                
+                if active_delivery:
+                    return Response({
+                        'error': 'active_order',
+                        'message': 'You cannot go offline while you have an active delivery in progress.'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            
+            request.user.is_available = is_available
             request.user.save(update_fields=['is_available'])
             
         serializer = RiderProfileSerializer(request.user, data=request.data, partial=True)
@@ -192,16 +220,48 @@ class RiderOrderQueueView(APIView):
     permission_classes = [IsRider]
     
     def get(self, request):
-        # 🛡️ Strict Isolation: Rider can ONLY see orders from their assigned store
-        if not request.user.assigned_store:
-            return Response({'error': 'No store assigned to this rider'}, status=status.HTTP_403_FORBIDDEN)
+        # 🌍 Open Pool Logistics with Proximity Intelligence
+        # 1. Active assignments (Always show regardless of distance)
+        active_assignments = Q(assigned_rider=request.user, status__in=['assigned', 'picked_up', 'arrived'])
+        
+        # 2. Available pool (Filtered by distance if location provided)
+        available_pool = Q(assigned_rider__isnull=True, status__in=['pending', 'confirmed', 'processing'])
+        
+        lat = request.query_params.get('lat')
+        lng = request.query_params.get('lng')
+        
+        if lat and lng:
+            try:
+                u_lat = float(lat)
+                u_lng = float(lng)
+                from .utils import haversine_distance_km
+                
+                # Performance: First get all candidate orders
+                candidates = Order.objects.filter(available_pool).select_related('store')
+                
+                # Filter candidates by distance (15km radius for Open Pool)
+                valid_ids = []
+                for order in candidates:
+                    if order.store and order.store.latitude and order.store.longitude:
+                        dist = haversine_distance_km(u_lat, u_lng, order.store.latitude, order.store.longitude)
+                        if dist <= 15: # 15km logistical reach
+                            valid_ids.append(order.id)
+                
+                # Refined available pool: Only nearby orders
+                available_pool = Q(id__in=valid_ids)
+                
+            except (ValueError, TypeError):
+                pass
+        else:
+            # 🛡️ Fallback: If Rider Location is OFF, show only their 'Home Store' available orders
+            # This prevents overwhelming the rider with distant orders they can't fulfill
+            if request.user.assigned_store:
+                available_pool &= Q(store=request.user.assigned_store)
+            else:
+                # No location and no home store = No available orders (Security/Efficiency gate)
+                available_pool = Q(pk__in=[])
 
-        # Available orders: assigned to nobody and status is pending, but ONLY for their store
-        # Or specifically assigned to this rider for active delivery
-        queryset = Order.objects.filter(
-            Q(assigned_rider__isnull=True, status='pending', store=request.user.assigned_store) | 
-            Q(assigned_rider=request.user, status__in=['assigned', 'picked_up', 'arrived'])
-        ).order_by('-created_at')
+        queryset = Order.objects.filter(active_assignments | available_pool).order_by('-created_at')
         
         serializer = OrderSerializer(queryset, many=True)
         return Response(serializer.data)
@@ -223,19 +283,16 @@ class RiderAcceptOrderView(APIView):
     permission_classes = [IsRider]
 
     def post(self, request, order_id):
-        if not request.user.assigned_store:
-            return Response({'error': 'No store assigned to this rider'}, status=status.HTTP_403_FORBIDDEN)
-
+        # 🌍 Open Pool: No 'assigned_store' check required anymore
         try:
-            # 🛡️ Strict Isolation: Only allow accepting if the order belongs to the rider's assigned store
+            # 🛡️ Multi-Tenant Support: Allow accepting if the order is unassigned and in a ready state
             order = Order.objects.get(
                 id=order_id, 
                 assigned_rider__isnull=True, 
-                status='pending',
-                store=request.user.assigned_store
+                status__in=['pending', 'confirmed', 'processing']
             )
         except Order.DoesNotExist:
-            return Response({'error': 'Order not available or belongs to another store'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Order no longer available'}, status=status.HTTP_404_NOT_FOUND)
 
         order.assigned_rider = request.user
         order.status = 'assigned'
