@@ -1,52 +1,40 @@
-# Hardening Customer Checkout and M-Pesa Integration
+# Resolving Rider Availability Toggle Latency
 
-Harden the customer checkout flow by fixing transactional inconsistencies, improving M-Pesa state management, and unifying domain logic.
+Fix the Rider Online/Offline toggle by addressing blocking GPS calls, backend parsing inconsistencies, and redundant UI loading states.
+
+## Diagnostic Report
+
+1.  **Blocking GPS Fetching (Flutter)**: The app calls `Geolocator.getCurrentPosition(accuracy: high)` directly inside the `toggleAvailability` flow. On many devices, "High Accuracy" GPS can take 10-30 seconds to lock, especially indoors, making the UI appear frozen or "loading for years."
+2.  **Smart Boolean Mismatch (Backend)**: The backend uses a complex manual check for `is_available` (`val if isinstance(val, bool) else str(val).lower() == 'true'`) which can fail depending on how Dio encodes the patch request, leading to the toggle being ignored.
+3.  **Lack of Optimistic UI**: The toggle waits for the full network round-trip (plus the GPS lock) before updating the switch state, leading to poor perceived performance.
+4.  **Race Conditions**: Redundant background polling (`_pollData` every 10s) may conflict with the `toggleAvailability` update, causing the UI to "flicker" back to the old state before the server responds.
 
 ## Proposed Changes
 
-### [Backend - Checkout Logic]
+### [Backend - Rider Logistics]
 
-#### [api_v1_customer_views.py](file:///C:/Users/PC/Desktop/tipsytheoryy/urbanfoods/api_v1_customer_views.py)
-- **CustomerPlaceOrderView**:
-    - Skip STK initiation if `order.total == 0`.
-    - Implement a "fail-closed" production flag: default to actual total unless `MPESA_PRODUCTION` is explicitly `false`.
-    - Improve error response when STK initiation fails to provide actionable feedback.
-- **CustomerRetryPaymentView**:
-    - Allow updating the `mpesa_phone` during retry to fix typos.
-- **[NEW] PaymentStatusView**:
-    - Lightweight endpoint for polling payment status without serializing the full order.
-- **[NEW] MpesaQueryView**:
-    - Endpoint to trigger a manual `stkpushquery` to Safaricom if a callback is delayed.
-
-#### [views.py](file:///C:/Users/PC/Desktop/tipsytheoryy/urbanfoods/views.py)
-- **mpesa_callback**:
-    - Fix idempotency guard: check for `payment_status == 'paid'` instead of `completed`.
-    - Ensure all side effects (Loyalty, stats) are protected by this guard.
+#### [api_v1_rider_views.py](file:///C:/Users/PC/Desktop/tipsytheoryy/urbanfoods/api_v1_rider_views.py)
+- Refactor `RiderProfileView.patch` to use the `RiderProfileSerializer` for ALL field parsing, including `is_available`.
+- Add explicit logging for GPS/Active order guards to help debug "silent" failures.
+- Ensure the `is_available` toggle instantly clears/sets the `rider_pos_` cache.
 
 ---
 
 ### [Flutter - Mobile App]
 
-#### [payment_pending_screen.dart](file:///C:/Users/PC/Desktop/tipsytheoryy_app/lib/screens/customer/payment_pending_screen.dart)
-- Switch polling to the new lightweight status endpoint.
-- Implement a "Stuck? Check Status" button that calls the new `MpesaQueryView`.
-- Optimize polling frequency and add a timeout that suggests manual checking or retry.
+#### [rider_provider.dart](file:///C:/Users/PC/Desktop/tipsytheoryy_app/lib/providers/rider_provider.dart)
+- **Fast-Track Toggle**: Use a lower accuracy or cached location if a high-accuracy lock takes too long (>3 seconds).
+- **Separated Loading States**: Distinguish between "Skeleton Loading" (background refresh) and "Action Loading" (blocking toggle).
+- **Optimistic Update**: Instantly update the local `_riderProfile.isAvailable` state and only revert if the API fails.
 
-#### [checkout_screen.dart](file:///C:/Users/PC/Desktop/tipsytheoryy_app/lib/screens/customer/checkout_screen.dart)
-- Improve cart clearing: notify the backend to clear the cart immediately upon successful order creation.
+#### [available_orders_screen.dart](file:///C:/Users/PC/Desktop/tipsytheoryy_app/lib/screens/rider/available_orders_screen.dart)
+- Add a visual "GPS Finding..." indicator if the delay is caused by location services.
+- Ensure the `Switch` remains responsive during the action.
 
 ## Verification Plan
 
-### Automated Tests
-- Create `urbanfoods/tests/test_checkout_v1.py` covering:
-    - Successful STK initiation.
-    - STK failure (rollback/state check).
-    - Wallet-only checkout (0 total).
-    - Idempotent callback processing.
-    - Amount mismatch in callback.
-    - Retry with new phone number.
-
 ### Manual Verification
-1. **Wallet-Only Checkout**: Place an order fully covered by wallet balance. Verify no STK push is triggered and order status is immediately `paid`.
-2. **STK Polling & Fallback**: Simulate a lost callback and trigger a manual status query from the "Payment Pending" screen.
-3. **Retry Flow**: Initiate payment with a wrong number, then use the "Retry" feature with the correct number and verify successful STK initiation.
+1. **Instant Toggle**: Click the Online switch. It should move to the ON position *instantly* (optimistic), with a small spinner appearing nearby while GPS/API finishes.
+2. **GPS Timeout**: Disable GPS or move to a basement. Verify the app times out gracefully and shows "Please turn on GPS" instead of loading indefinitely.
+3. **Active Order Guard**: Try to go offline while carrying an order. Verify the backend correctly rejects the request and the app shows the error message.
+4. **Offline Persistence**: Toggle offline and verify the `rider_pos_` cache is cleared in Redis (via backend logs).
