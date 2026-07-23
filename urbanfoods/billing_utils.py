@@ -56,7 +56,7 @@ class SubscriptionBilling:
             logger.exception("Failed to obtain Subscription MPESA access token")
             return None
 
-    def charge_subscription(self, store, custom_phone=None):
+    def charge_subscription(self, store, custom_phone=None, amount=None):
         access_token = self.get_access_token()
         if not access_token:
             return {'success': False, 'message': 'Access token error'}
@@ -82,7 +82,7 @@ class SubscriptionBilling:
             "Password": password,
             "Timestamp": timestamp,
             "TransactionType": "CustomerPayBillOnline",
-            "Amount": int(store.plan_price),
+            "Amount": int(amount if amount is not None else store.plan_price),
             "PartyA": phone,
             "PartyB": self.shortcode,
             "PhoneNumber": phone,
@@ -106,7 +106,11 @@ class SubscriptionBilling:
             response.raise_for_status()
             result = response.json()
             if result.get("ResponseCode") == "0":
-                return {"success": True, "message": "STK push initiated"}
+                return {
+                    "success": True,
+                    "message": result.get("CustomerMessage", "STK push initiated"),
+                    "checkout_request_id": result.get("CheckoutRequestID"),
+                }
             return {"success": False, "message": result.get("ResponseDescription")}
         except Exception as e:
             logger.exception("Subscription STK Push failed")

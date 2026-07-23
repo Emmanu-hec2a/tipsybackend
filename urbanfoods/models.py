@@ -675,8 +675,21 @@ class RiderLocationPing(models.Model):
 class SubscriptionPayment(models.Model):
     store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='subscription_payments')
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    status = models.CharField(max_length=20, choices=[('success','Success'),('failed','Failed')])
+    status = models.CharField(max_length=20, choices=[
+        ('pending', 'Pending'),
+        ('success', 'Success'),
+        ('failed', 'Failed'),
+    ], default='pending')
+    plan = models.CharField(max_length=20, choices=[
+        ('base', 'Base'), ('pro', 'Pro'), ('custom', 'Custom')
+    ], null=True, blank=True)
+    checkout_request_id = models.CharField(max_length=50, unique=True, null=True, blank=True, db_index=True)
+    phone_number = models.CharField(max_length=15, blank=True)
+    result_code = models.IntegerField(null=True, blank=True)
+    result_desc = models.TextField(blank=True)
+    transaction_date = models.CharField(max_length=20, blank=True)
     mpesa_receipt = models.CharField(max_length=50, null=True, blank=True)
+    raw_callback = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
 class PlatformConfig(models.Model):

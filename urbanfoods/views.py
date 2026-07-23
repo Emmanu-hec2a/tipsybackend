@@ -997,7 +997,7 @@ def mpesa_callback(request):
             return HttpResponse("OK")
 
         # ── Idempotency guard ──
-        if order.payment_status == 'completed':
+        if order.payment_status == 'paid':
             return HttpResponse("OK")
 
         # ── Parse callback metadata ──

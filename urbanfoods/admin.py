@@ -172,9 +172,9 @@ class RiderLocationPingAdmin(ModelAdmin):
 
 @admin.register(SubscriptionPayment)
 class SubscriptionPaymentAdmin(ModelAdmin):
-    list_display = ('store', 'amount', 'status', 'mpesa_receipt', 'created_at')
+    list_display = ('store', 'amount', 'status', 'plan', 'checkout_request_id', 'mpesa_receipt', 'created_at')
     list_filter = ('status', 'created_at')
-    search_fields = ('store__name', 'mpesa_receipt')
+    search_fields = ('store__name', 'mpesa_receipt', 'checkout_request_id', 'phone_number')
 
 @admin.register(PlatformConfig)
 class PlatformConfigAdmin(ModelAdmin):

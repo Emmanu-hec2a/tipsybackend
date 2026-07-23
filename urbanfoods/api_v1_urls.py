@@ -34,6 +34,7 @@ partner_patterns = [
     path('franchise/switch/', api_v1_partner_views.SwitchActiveStoreView.as_view(), name='partner_franchise_switch'),
     path('franchise/create-branch/', api_v1_partner_views.CreateBranchView.as_view(), name='partner_franchise_create_branch'),
     path('billing/pay-now/', api_v1_billing_views.PayNowView.as_view(), name='partner_billing_pay_now'),
+    path('billing/status/', api_v1_billing_views.SubscriptionPaymentStatusView.as_view(), name='partner_billing_status'),
     path('payments/mpesa/initiate/', api_v1_billing_views.PayNowView.as_view(), name='partner_payments_mpesa_initiate'),
     path('billing/history/', api_v1_billing_views.SubscriptionHistoryView.as_view(), name='partner_billing_history'),
 ]
@@ -53,6 +54,8 @@ customer_patterns = [
     path('orders/create/', api_v1_customer_views.CustomerPlaceOrderView.as_view(), name='customer_place_order'),
     path('orders/retry-payment/', api_v1_customer_views.CustomerRetryPaymentView.as_view(), name='customer_order_retry_payment'),
     path('orders/<int:pk>/', api_v1_customer_views.CustomerOrderDetailView.as_view(), name='customer_order_detail'),
+    path('orders/<int:pk>/payment-status/', api_v1_customer_views.CustomerOrderPaymentStatusView.as_view(), name='customer_order_payment_status'),
+    path('orders/<int:pk>/mpesa-query/', api_v1_customer_views.CustomerMpesaQueryView.as_view(), name='customer_order_mpesa_query'),
     path('orders/<int:pk>/rate/', api_v1_customer_views.CustomerRateOrderView.as_view(), name='customer_rate_order'),
 ]
 

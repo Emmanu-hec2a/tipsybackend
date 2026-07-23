@@ -238,6 +238,58 @@ class CustomerOrderDetailView(generics.RetrieveAPIView):
     def get_queryset(self):
         return Order.objects.filter(user=self.request.user)
 
+class CustomerOrderPaymentStatusView(APIView):
+    permission_classes = [IsCustomer]
+
+    def get(self, request, pk):
+        order = get_object_or_404(Order, pk=pk, user=request.user)
+        return Response({
+            'order_id': order.id,
+            'order_number': order.order_number,
+            'payment_status': order.payment_status,
+            'status': order.status,
+            'mpesa_checkout_request_id': order.mpesa_checkout_request_id
+        })
+
+class CustomerMpesaQueryView(APIView):
+    permission_classes = [IsCustomer]
+
+    def post(self, request, pk):
+        order = get_object_or_404(Order, pk=pk, user=request.user)
+        
+        if not order.mpesa_checkout_request_id:
+            return Response({'error': 'No M-Pesa transaction found for this order'}, status=400)
+            
+        if order.payment_status == 'paid':
+            return Response({'status': 'paid', 'message': 'Payment already confirmed'})
+
+        from .mpesa_utils import MpesaIntegration
+        mpesa = MpesaIntegration(store=order.store)
+        
+        try:
+            result = mpesa.query_stk_status(order.mpesa_checkout_request_id)
+            
+            if result.get('success'):
+                res_code = result.get('result_code')
+                
+                # If success (0), manually confirm payment if callback was lost
+                if str(res_code) == '0':
+                    from .views import _confirm_payment
+                    from django.db import transaction
+                    with transaction.atomic():
+                        _confirm_payment(order, notes="Confirmed via manual STK query fallback")
+                    return Response({'status': 'paid', 'message': 'Payment confirmed'})
+                elif res_code:
+                    # If specific failure code returned by Safaricom
+                    from .views import _fail_payment
+                    _fail_payment(order, reason=result.get('result_desc', 'STK Query reported failure'))
+                    return Response({'status': 'failed', 'message': result.get('result_desc')})
+            
+            return Response({'status': order.payment_status, 'message': 'Still pending or query failed'})
+        except Exception as e:
+            logger.exception(f"Manual STK Query failed for Order {order.id}")
+            return Response({'error': str(e)}, status=500)
+
 class OrderChatMessagesView(generics.ListCreateAPIView):
     serializer_class = ChatMessageSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -318,12 +370,12 @@ class CustomerRetryPaymentView(APIView):
             phone = mpesa.format_phone_number(raw_phone)
             
             # Update order phone if a new one was provided for this retry
-            if raw_phone and phone != order.phone_number:
+            if raw_phone:
                 order.phone_number = phone
                 order.save(update_fields=['phone_number'])
             
-            # Use a small amount for testing if not production
-            is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
+            # 🛡️ Fail-Closed Production Guard
+            is_production = str(os.environ.get('MPESA_PRODUCTION', 'false')).lower() == 'true'
             amount = int(order.total) if is_production else 1
             
             stk_result = mpesa.initiate_stk_push(
@@ -588,7 +640,9 @@ class CustomerPlaceOrderView(APIView):
                 requires_verification = (subtotal >= 15000) or (risk >= 40)
 
                 # Initial status is 'payment_pending' if M-Pesa is used, otherwise 'pending' for Cash
-                initial_status = 'payment_pending' if data.get('payment_method') == 'mpesa' else 'pending'
+                initial_status = 'pending'
+                if data.get('payment_method') == 'mpesa' and total > 0:
+                    initial_status = 'payment_pending'
 
                 order = Order.objects.create(
                     user=request.user,
@@ -621,8 +675,8 @@ class CustomerPlaceOrderView(APIView):
                 response_data = OrderSerializer(order).data
 
             # --- OUTSIDE TRANSACTION ---
-            # Trigger M-Pesa STK Push if method is mpesa
-            if order.payment_method == 'mpesa':
+            # Trigger M-Pesa STK Push if method is mpesa and there is a balance
+            if order.payment_method == 'mpesa' and order.total > 0:
                 logger.info(f"Triggering STK Push for Order {order.order_number} (ID: {order.id})")
                 try:
                     mpesa = MpesaIntegration(store=order.store)
@@ -635,7 +689,7 @@ class CustomerPlaceOrderView(APIView):
                     order.phone_number = phone 
                     order.save(update_fields=['phone_number'])
                     
-                    # Use a small amount for testing if not production
+                    # 🛡️ Fail-Closed Production Guard
                     is_production = str(os.environ.get('MPESA_PRODUCTION', 'false')).lower() == 'true'
                     amount = int(order.total) if is_production else 1
                     
@@ -655,7 +709,9 @@ class CustomerPlaceOrderView(APIView):
                         response_data['message'] = "M-Pesa STK push initiated successfully."
                         logger.info(f"STK Push Success: {order.mpesa_checkout_request_id}")
                     else:
-                        error_msg = stk_result.get('message', 'Unknown M-Pesa error')
+                        # 🛡️ Critical: Initiation Failed.
+                        # Do not rollback order, but ensure user knows they must retry
+                        error_msg = stk_result.get('message', 'M-Pesa service unavailable')
                         response_data['mpesa_error'] = error_msg
                         logger.error(f"STK Push Failed: {error_msg}")
                 except Exception as mpesa_err:
