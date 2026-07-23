@@ -61,6 +61,7 @@ auth_patterns = [
     path('fcm-test/', views.TestFCMNotificationView.as_view(), name='test_fcm_token'),
     path('login/', api_v1_auth_views.UnifiedLoginView.as_view(), name='unified_login_api'),
     path('social-login/', api_v1_auth_views.FirebaseSocialLoginView.as_view(), name='firebase_social_login'),
+    path('social-link-phone/', api_v1_auth_views.LinkSocialPhoneView.as_view(), name='social_link_phone'),
     path('partner/login/', views.PartnerLoginView.as_view(), name='partner_login_api'),
     path('partner/signup/', views.PartnerSignupView.as_view(), name='partner_signup_api'),
     path('rider/login/', views.RiderLoginView.as_view(), name='rider_login_api'),

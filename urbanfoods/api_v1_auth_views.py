@@ -86,6 +86,7 @@ class FirebaseSocialLoginView(APIView):
     """
     Production-ready social login using Firebase ID Tokens.
     Supports Google and Apple authentication.
+    Handles 'Smart Linking' with phone-based accounts.
     """
     permission_classes = []
     
@@ -106,12 +107,12 @@ class FirebaseSocialLoginView(APIView):
             if not email:
                 return Response({'error': 'Email not provided by social provider'}, status=status.HTTP_400_BAD_REQUEST)
                 
-            # Find or Create User
+            # 1. Attempt to find user by Email
             user = User.objects.filter(email=email).first()
             
+            is_new_user = False
             if not user:
                 # 🛡️ New Social Users default to 'customer'
-                # Split name if possible
                 first_name = ""
                 last_name = ""
                 if name:
@@ -127,15 +128,78 @@ class FirebaseSocialLoginView(APIView):
                     role='customer',
                     first_name=first_name,
                     last_name=last_name,
-                    is_verified=True
+                    is_verified=True,
+                    profile_picture=picture
                 )
+                is_new_user = True
             
-            # 🛡️ Returning users (Riders or Customers) keep their existing role
-            return Response(get_tokens(user))
+            # 2. Check if phone setup is needed
+            # A user needs phone setup if they don't have a phone number yet.
+            requires_phone_setup = not bool(user.phone)
+            
+            res_data = get_tokens(user)
+            res_data['requires_phone_setup'] = requires_phone_setup
+            res_data['is_new_user'] = is_new_user
+            
+            return Response(res_data)
             
         except Exception as e:
             logger.error(f"Firebase social login error: {e}")
             return Response({'error': 'Invalid social token or verification failed'}, status=status.HTTP_401_UNAUTHORIZED)
+
+class LinkSocialPhoneView(APIView):
+    """
+    Finalizes social login by linking a phone number.
+    Handles 'Account Merging' if the phone already exists.
+    """
+    def post(self, request):
+        phone = request.data.get('phone')
+        if not phone:
+            return Response({'error': 'Phone number is required'}, status=400)
+            
+        current_user = request.user
+        
+        # 1. Check if another account already uses this phone
+        existing_user = User.objects.filter(phone=phone).exclude(id=current_user.id).first()
+        
+        if existing_user:
+            # 🛡️ SMART MERGE: Move social identity (Email/Name) to the phone account
+            # and delete the temporary social-only account.
+            
+            # Only merge if the existing account doesn't have an email yet, 
+            # or if it's the SAME email.
+            if not existing_user.email or existing_user.email == current_user.email:
+                existing_user.email = current_user.email
+                if not existing_user.first_name:
+                    existing_user.first_name = current_user.first_name
+                if not existing_user.last_name:
+                    existing_user.last_name = current_user.last_name
+                if not existing_user.profile_picture:
+                    existing_user.profile_picture = current_user.profile_picture
+                
+                existing_user.is_verified = True
+                existing_user.save()
+                
+                # Delete the temporary placeholder
+                current_user.delete()
+                
+                return Response({
+                    'message': 'Accounts merged successfully',
+                    **get_tokens(existing_user)
+                })
+            else:
+                return Response({
+                    'error': 'This phone is already linked to a different email address.'
+                }, status=400)
+        
+        # 2. Simply update the current user if phone is unique
+        current_user.phone = phone
+        current_user.save()
+        
+        return Response({
+            'message': 'Phone linked successfully',
+            'role': current_user.role
+        })
 
 class RiderSignupView(APIView):
     permission_classes = []

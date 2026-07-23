@@ -6,6 +6,10 @@ from django.utils import timezone
 from django.db.models import Q, F
 from django.core.cache import cache
 import json
+import logging
+
+logger = logging.getLogger(__name__)
+
 from .models import Order, RiderEarning, User
 from .api_v1_serializers import OrderSerializer, RiderEarningSerializer, RiderProfileSerializer
 from .permissions import IsRider
@@ -177,15 +181,20 @@ class RiderProfileView(APIView):
         return Response(serializer.data)
         
     def patch(self, request):
+        logger.info(f"Rider Profile Patch Request: {request.data} for user {request.user.id}")
+        
         # 🛡️ Mandatory Location Gate: To go online, rider MUST provide GPS
         if 'is_available' in request.data:
-            is_available = request.data['is_available']
+            # Handle both JSON boolean and possible form-encoded string
+            val = request.data['is_available']
+            is_available = val if isinstance(val, bool) else str(val).lower() == 'true'
             
             if is_available:
                 lat = request.data.get('latitude')
                 lng = request.data.get('longitude')
                 
                 if not lat or not lng:
+                    logger.warning(f"Rider {request.user.id} tried to go online without GPS. Lat: {lat}, Lng: {lng}")
                     return Response({
                         'error': 'location_required',
                         'message': 'High-accuracy GPS is required to accept deliveries.'
@@ -202,6 +211,7 @@ class RiderProfileView(APIView):
                 ).exists()
                 
                 if active_delivery:
+                    logger.warning(f"Rider {request.user.id} tried to go offline with active orders.")
                     return Response({
                         'error': 'active_order',
                         'message': 'You cannot go offline while you have an active delivery in progress.'
@@ -214,7 +224,14 @@ class RiderProfileView(APIView):
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+        logger.error(f"Rider Profile Validation Errors: {serializer.errors}")
+        # Always wrap errors in a message for the frontend
+        return Response({
+            'error': 'validation_error',
+            'message': 'Unable to update profile. Please check your details.',
+            'details': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
 
 class RiderOrderQueueView(APIView):
     permission_classes = [IsRider]
