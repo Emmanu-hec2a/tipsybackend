@@ -3,14 +3,16 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from django.utils import timezone
+from django.db import transaction
 from django.db.models import Q, F
 from django.core.cache import cache
 import json
 import logging
+from decimal import Decimal, InvalidOperation
 
 logger = logging.getLogger(__name__)
 
-from .models import Order, RiderEarning, User
+from .models import Order, RiderEarning, RiderLocationPing, User
 from .api_v1_serializers import OrderSerializer, RiderEarningSerializer, RiderProfileSerializer
 from .permissions import IsRider
 
@@ -19,6 +21,18 @@ VALID_TRANSITIONS = {
     'picked_up': ['arrived'],
     'arrived': ['delivered'],
 }
+
+
+def parse_rider_coordinates(latitude, longitude):
+    try:
+        lat = Decimal(str(latitude))
+        lng = Decimal(str(longitude))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        return None
+    return lat, lng
 
 class RiderOrderStatusView(APIView):
     permission_classes = [IsRider]
@@ -130,12 +144,34 @@ class RiderLocationPingView(APIView):
         lat = request.data.get('latitude')
         lng = request.data.get('longitude')
 
-        if not lat or not lng:
-            return Response({'error': 'Missing coordinates'}, status=status.HTTP_400_BAD_REQUEST)
+        coordinates = parse_rider_coordinates(lat, lng)
+        if coordinates is None:
+            return Response({'error': 'Invalid coordinates'}, status=status.HTTP_400_BAD_REQUEST)
+        lat, lng = coordinates
+
+        order = None
+        if order_id:
+            try:
+                order = Order.objects.get(
+                    id=order_id,
+                    assigned_rider=request.user,
+                    status__in=['assigned', 'picked_up', 'arrived']
+                )
+            except Order.DoesNotExist:
+                return Response({'error': 'Active order not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Heartbeats without an order establish discoverability. Active-order
+        # pings remain buffered below and are persisted on delivery completion.
+        if order is None:
+            RiderLocationPing.objects.create(
+                rider=request.user,
+                latitude=lat,
+                longitude=lng,
+            )
 
         # 1. Update latest rider position in cache for real-time retrieval
         rider_pos_key = f"rider_pos_{request.user.id}"
-        cache.set(rider_pos_key, {'lat': lat, 'lng': lng}, timeout=300) # 5 mins TTL
+        cache.set(rider_pos_key, {'lat': float(lat), 'lng': float(lng)}, timeout=300)
 
         # 2. If this ping is for a specific order, buffer it for the trip path
         if order_id:
@@ -182,56 +218,51 @@ class RiderProfileView(APIView):
         
     def patch(self, request):
         logger.info(f"Rider Profile Patch Request: {request.data} for user {request.user.id}")
-        
-        # 🛡️ Mandatory Location Gate: To go online, rider MUST provide GPS
+        is_available = None
+        coordinates = None
         if 'is_available' in request.data:
-            # Handle both JSON boolean and possible form-encoded string
             val = request.data['is_available']
             is_available = val if isinstance(val, bool) else str(val).lower() == 'true'
-            
+
             if is_available:
-                lat = request.data.get('latitude')
-                lng = request.data.get('longitude')
-                
-                if not lat or not lng:
-                    logger.warning(f"Rider {request.user.id} tried to go online without GPS. Lat: {lat}, Lng: {lng}")
+                coordinates = parse_rider_coordinates(
+                    request.data.get('latitude'), request.data.get('longitude')
+                )
+                if coordinates is None:
                     return Response({
                         'error': 'location_required',
-                        'message': 'High-accuracy GPS is required to accept deliveries.'
+                        'message': 'Valid GPS coordinates are required to go online.'
                     }, status=status.HTTP_400_BAD_REQUEST)
-                
-                # Instantly cache position to make rider visible to merchants
-                rider_pos_key = f"rider_pos_{request.user.id}"
-                cache.set(rider_pos_key, {'lat': lat, 'lng': lng}, timeout=300)
-            else:
-                # 🛡️ Safety Guard: Prevent going offline if they have an active order
-                active_delivery = Order.objects.filter(
-                    assigned_rider=request.user, 
-                    status__in=['assigned', 'picked_up', 'arrived']
-                ).exists()
-                
-                if active_delivery:
-                    logger.warning(f"Rider {request.user.id} tried to go offline with active orders.")
-                    return Response({
-                        'error': 'active_order',
-                        'message': 'You cannot go offline while you have an active delivery in progress.'
-                    }, status=status.HTTP_400_BAD_REQUEST)
-            
-            request.user.is_available = is_available
-            request.user.save(update_fields=['is_available'])
-            
+            elif Order.objects.filter(
+                assigned_rider=request.user,
+                status__in=['assigned', 'picked_up', 'arrived']
+            ).exists():
+                return Response({
+                    'error': 'active_order',
+                    'message': 'You cannot go offline while you have an active delivery in progress.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
         serializer = RiderProfileSerializer(request.user, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-            
-        logger.error(f"Rider Profile Validation Errors: {serializer.errors}")
-        # Always wrap errors in a message for the frontend
-        return Response({
-            'error': 'validation_error',
-            'message': 'Unable to update profile. Please check your details.',
-            'details': serializer.errors
-        }, status=status.HTTP_400_BAD_REQUEST)
+        if not serializer.is_valid():
+            logger.error(f"Rider Profile Validation Errors: {serializer.errors}")
+            return Response({
+                'error': 'validation_error',
+                'message': 'Unable to update profile. Please check your details.',
+                'details': serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer.save()
+        if is_available and coordinates:
+            lat, lng = coordinates
+            RiderLocationPing.objects.create(
+                rider=request.user, latitude=lat, longitude=lng
+            )
+            cache.set(
+                f"rider_pos_{request.user.id}",
+                {'lat': float(lat), 'lng': float(lng)},
+                timeout=300
+            )
+        return Response(serializer.data)
 
 class RiderOrderQueueView(APIView):
     permission_classes = [IsRider]
@@ -300,19 +331,25 @@ class RiderAcceptOrderView(APIView):
     permission_classes = [IsRider]
 
     def post(self, request, order_id):
-        # 🌍 Open Pool: No 'assigned_store' check required anymore
-        try:
-            # 🛡️ Multi-Tenant Support: Allow accepting if the order is unassigned and in a ready state
-            order = Order.objects.get(
-                id=order_id, 
-                assigned_rider__isnull=True, 
-                status__in=['pending', 'confirmed', 'processing']
-            )
-        except Order.DoesNotExist:
-            return Response({'error': 'Order no longer available'}, status=status.HTTP_404_NOT_FOUND)
+        with transaction.atomic():
+            rider = User.objects.select_for_update().get(pk=request.user.pk)
+            if not rider.is_available:
+                return Response(
+                    {'error': 'Rider must be online to accept orders'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
-        order.assigned_rider = request.user
-        order.status = 'assigned'
-        order.save()
+            try:
+                order = Order.objects.select_for_update().get(
+                    id=order_id,
+                    assigned_rider__isnull=True,
+                    status__in=['pending', 'confirmed', 'processing']
+                )
+            except Order.DoesNotExist:
+                return Response({'error': 'Order no longer available'}, status=status.HTTP_404_NOT_FOUND)
+
+            order.assigned_rider = request.user
+            order.status = 'assigned'
+            order.save(update_fields=['assigned_rider', 'status'])
         
         return Response({'status': 'accepted', 'order': OrderSerializer(order).data})
