@@ -2,7 +2,13 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth import authenticate
-from .models import User
+from django.core.mail import EmailMessage
+from django.template.loader import render_to_string
+from django.utils import timezone
+from datetime import timedelta
+import random
+import string
+from .models import User, PasswordResetToken
 from .views import get_tokens
 from django.db import IntegrityError
 import logging
@@ -81,6 +87,93 @@ class CustomerSignupView(APIView):
             return Response({'error': 'Technical error: Identity already registered.'}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class RequestPasswordResetView(APIView):
+    """
+    Step 1: User provides email, server generates 6-digit OTP and sends via Resend.
+    """
+    permission_classes = []
+
+    def post(self, request):
+        email = request.data.get('email')
+        if not email:
+            return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = User.objects.filter(email=email).first()
+        
+        # 🛡️ Non-enumeration: Always return 200 even if user not found
+        if not user:
+            return Response({'message': 'If an account exists with this email, you will receive a reset code.'})
+
+        # Generate 6-digit numeric OTP
+        otp = ''.join(random.choices(string.digits, k=6))
+        
+        # Save token to database
+        PasswordResetToken.objects.create(
+            user=user,
+            token=otp,
+            expires_at=timezone.now() + timedelta(minutes=15)
+        )
+
+        # Send Email via Resend
+        try:
+            html_content = render_to_string('emails/password_reset_otp.html', {'otp': otp})
+            email_msg = EmailMessage(
+                subject='Your Tipsy Theoryy Reset Code',
+                body=html_content,
+                from_email='Tipsy Theoryy <support@s.tipsytheoryy.com>',
+                to=[email],
+            )
+            email_msg.content_subtype = 'html'
+            email_msg.send()
+        except Exception as e:
+            logger.error(f"Failed to send password reset email: {e}")
+            # In a real prod env, we might want to return 500 or just log it
+            return Response({'error': 'Failed to send reset code. Please try again later.'}, status=500)
+
+        return Response({'message': 'If an account exists with this email, you will receive a reset code.'})
+
+class VerifyPasswordResetView(APIView):
+    """
+    Step 2: User provides email, OTP, and new password.
+    """
+    permission_classes = []
+
+    def post(self, request):
+        email = request.data.get('email')
+        otp = request.data.get('otp')
+        new_password = request.data.get('password')
+
+        if not email or not otp or not new_password:
+            return Response({'error': 'Email, OTP, and new password are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = User.objects.filter(email=email).first()
+        if not user:
+            return Response({'error': 'Invalid request'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check most recent valid token
+        reset_token = PasswordResetToken.objects.filter(
+            user=user, 
+            token=otp, 
+            is_used=False,
+            expires_at__gt=timezone.now()
+        ).last()
+
+        if not reset_token:
+            return Response({'error': 'Invalid or expired reset code'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Update password
+        user.set_password(new_password)
+        user.save()
+
+        # Mark token as used
+        reset_token.is_used = True
+        reset_token.save()
+
+        # 🛡️ Security: Invalidate all other pending tokens for this user
+        PasswordResetToken.objects.filter(user=user, is_used=False).update(is_used=True)
+
+        return Response({'message': 'Password has been reset successfully.'})
 
 class FirebaseSocialLoginView(APIView):
     """
@@ -248,3 +341,90 @@ class RiderSignupView(APIView):
             return Response({'error': 'Technical error: Identity already registered.'}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class RequestPasswordResetView(APIView):
+    """
+    Step 1: User provides email, server generates 6-digit OTP and sends via Resend.
+    """
+    permission_classes = []
+
+    def post(self, request):
+        email = request.data.get('email')
+        if not email:
+            return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = User.objects.filter(email=email).first()
+        
+        # 🛡️ Non-enumeration: Always return 200 even if user not found
+        if not user:
+            return Response({'message': 'If an account exists with this email, you will receive a reset code.'})
+
+        # Generate 6-digit numeric OTP
+        otp = ''.join(random.choices(string.digits, k=6))
+        
+        # Save token to database
+        PasswordResetToken.objects.create(
+            user=user,
+            token=otp,
+            expires_at=timezone.now() + timedelta(minutes=15)
+        )
+
+        # Send Email via Resend
+        try:
+            html_content = render_to_string('emails/password_reset_otp.html', {'otp': otp})
+            email_msg = EmailMessage(
+                subject='Your Tipsy Theoryy Reset Code',
+                body=html_content,
+                from_email='Tipsy Theoryy <support@s.tipsytheoryy.com>',
+                to=[email],
+            )
+            email_msg.content_subtype = 'html'
+            email_msg.send()
+        except Exception as e:
+            logger.error(f"Failed to send password reset email: {e}")
+            # In a real prod env, we might want to return 500 or just log it
+            return Response({'error': 'Failed to send reset code. Please try again later.'}, status=500)
+
+        return Response({'message': 'If an account exists with this email, you will receive a reset code.'})
+
+class VerifyPasswordResetView(APIView):
+    """
+    Step 2: User provides email, OTP, and new password.
+    """
+    permission_classes = []
+
+    def post(self, request):
+        email = request.data.get('email')
+        otp = request.data.get('otp')
+        new_password = request.data.get('password')
+
+        if not email or not otp or not new_password:
+            return Response({'error': 'Email, OTP, and new password are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = User.objects.filter(email=email).first()
+        if not user:
+            return Response({'error': 'Invalid request'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check most recent valid token
+        reset_token = PasswordResetToken.objects.filter(
+            user=user, 
+            token=otp, 
+            is_used=False,
+            expires_at__gt=timezone.now()
+        ).last()
+
+        if not reset_token:
+            return Response({'error': 'Invalid or expired reset code'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Update password
+        user.set_password(new_password)
+        user.save()
+
+        # Mark token as used
+        reset_token.is_used = True
+        reset_token.save()
+
+        # 🛡️ Security: Invalidate all other pending tokens for this user
+        PasswordResetToken.objects.filter(user=user, is_used=False).update(is_used=True)
+
+        return Response({'message': 'Password has been reset successfully.'})

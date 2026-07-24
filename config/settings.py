@@ -76,6 +76,7 @@ INSTALLED_APPS = [
     'urbanfoods',  # Your app name
     'rest_framework',  # For API endpoints
     'corsheaders',
+    'anymail',
 ]
 
 MIDDLEWARE = [
@@ -365,3 +366,11 @@ MPESA_CALLBACK_URL = os.environ.get('MPESA_CALLBACK_URL')
 # Payment Credentials (Managed via PlatformConfig and Store models)
 MPESA_PRODUCTION = os.environ.get('MPESA_PRODUCTION', 'False')
 ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY')
+
+# Anymail & Resend Configuration
+ANYMAIL = {
+    "RESEND_API_KEY": os.environ.get("RESEND_API_KEY"),
+}
+EMAIL_BACKEND = "anymail.backends.resend.EmailBackend"
+DEFAULT_FROM_EMAIL = "Tipsy Theoryy <support@s.tipsytheoryy.com>"
+SERVER_EMAIL = "support@s.tipsytheoryy.com"

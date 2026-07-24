@@ -71,6 +71,8 @@ auth_patterns = [
     path('rider/signup/', api_v1_auth_views.RiderSignupView.as_view(), name='rider_signup_api'),
     path('customer/login/', views.CustomerLoginView.as_view(), name='customer_login_api'),
     path('customer/signup/', api_v1_auth_views.CustomerSignupView.as_view(), name='customer_signup_api'),
+    path('password-reset/request/', api_v1_auth_views.RequestPasswordResetView.as_view(), name='password_reset_request'),
+    path('password-reset/verify/', api_v1_auth_views.VerifyPasswordResetView.as_view(), name='password_reset_verify'),
 ]
 
 rider_patterns = [
