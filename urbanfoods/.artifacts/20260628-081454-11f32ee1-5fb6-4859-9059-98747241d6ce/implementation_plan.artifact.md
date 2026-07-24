@@ -1,39 +1,45 @@
-# Fixing Customer-Rider Chat Failures
+# Fixing Timezone Discrepancies and Rider Earnings Logic
 
-Resolve the "Message could not be sent" error by fixing URL parameter mismatches and hardening participant permission logic.
+Resolve the "incorrect time" on both apps and align rider earnings strictly with the delivery fee paid by customers.
 
 ## Diagnostic Report
 
-1.  **URL Parameter Mismatch**: The backend view `OrderChatMessagesView` expects a parameter named `order_id`, but the URL configuration in `api_v1_urls.py` provides it as `pk`. This causes `get_object_or_404(Order, id=order_id)` to fail, resulting in a **400 Bad Request** or **404 Not Found**.
-2.  **Strict Permission Denial**: The check `if self.request.user != order.user and self.request.user != order.assigned_rider` can fail if the order object isn't retrieved correctly, leading to a "You are not authorized" error.
-3.  **Role-Based Filtering Logic**: The `get_queryset` method uses `user.role` to filter messages. If a user has a role not explicitly handled (like `partner` or `superadmin`), it returns an empty list, which can confuse the frontend.
-4.  **Frontend Error Handling**: The Flutter app shows a generic "Check if rider is assigned" message for ANY chat send failure (400, 401, 403, 500), masking the true cause of the error.
+1.  **Timezone Mismatch**: The backend sends UTC timestamps (e.g., `2023-10-27T10:00:00Z`). The Flutter app parses these but displays them directly without calling `.toLocal()`. Since Kenya is UTC+3, users see times that are 3 hours behind.
+2.  **Earnings Logic Disconnect**:
+    *   The `Order` model has a `rider_base_fare` field that defaults to **200**.
+    *   When a customer places an order, the `delivery_fee` is calculated dynamically (e.g., 150 or 250).
+    *   However, `rider_base_fare` is never updated to match this `delivery_fee`.
+    *   When the rider completes the delivery, the `RiderEarning` record is created using the stagnant `rider_base_fare` (200) instead of the actual `delivery_fee`.
 
 ## Proposed Changes
 
-### [Backend - Logistics Chat]
+### [Backend - Logistics & Finance]
 
 #### [api_v1_customer_views.py](file:///C:/Users/PC/Desktop/tipsytheoryy/urbanfoods/api_v1_customer_views.py)
-- Refactor `OrderChatMessagesView` to use `pk` from `self.kwargs` to match the URL definition.
-- Harden `perform_create` to ensure the `Order` exists before checking permissions.
-- Simplify participant validation: allow any user who is either the `user` (Customer) or the `assigned_rider` of the order.
-- Add explicit error logging for rejected chat attempts.
+- In `CustomerPlaceOrderView`, update the `Order.objects.create` call to set `rider_base_fare=delivery_fee`. This ensures the rider's potential earning matches exactly what the customer paid.
 
-#### [api_v1_urls.py](file:///C:/Users/PC/Desktop/tipsytheoryy/urbanfoods/api_v1_urls.py)
-- Ensure the chat endpoint uses `<int:order_id>` consistently across the project if `order_id` is preferred over `pk`.
+#### [api_v1_rider_views.py](file:///C:/Users/PC/Desktop/tipsytheoryy/urbanfoods/api_v1_rider_views.py)
+- In `RiderOrderStatusView` (for `delivered` status), ensure the `RiderEarning` creation uses the most up-to-date `rider_base_fare` from the order.
 
 ---
 
 ### [Flutter - Mobile App]
 
-#### [chat_screen.dart](file:///C:/Users/PC/Desktop/tipsytheoryy_app/lib/screens/customer/chat_screen.dart)
-- Improve error feedback: only show the "No rider assigned" message if the server specifically returns that error. Show "Message failed" for other server errors.
+#### [order_model.dart](file:///C:/Users/PC/Desktop/tipsytheoryy_app/lib/models/order_model.dart)
+- Update `fromJson` to call `.toLocal()` on `createdAt` and `riderVerifiedAt`.
+
+#### [chat_message_model.dart](file:///C:/Users/PC/Desktop/tipsytheoryy_app/lib/models/chat_message_model.dart)
+- Update `fromJson` to call `.toLocal()` on `createdAt`.
+
+#### [earnings_screen.dart](file:///C:/Users/PC/Desktop/tipsytheoryy_app/lib/screens/rider/earnings_screen.dart)
+- Update the transaction history list to call `.toLocal()` on the parsed timestamp.
 
 ## Verification Plan
 
 ### Manual Verification
-1. **Assign Rider**: Use the Partner dashboard to assign a rider to an order.
-2. **Customer Chat**: Login as the customer, navigate to the order tracking, and send a message. Verify it succeeds.
-3. **Rider Chat**: Login as the assigned rider, navigate to the active delivery, and reply to the message. Verify it succeeds.
-4. **FCM Check**: Verify that both parties receive a push notification when a message is received.
-5. **Security Check**: Try to access the chat endpoint for an order you are NOT part of (as a different customer). Verify it returns **403 Forbidden**.
+1. **Place Order**: Create an order as a customer. Verify the `delivery_fee` (e.g., KSh 150).
+2. **Backend Audit**: Check the database for the new order. Verify `delivery_fee` is 150 AND `rider_base_fare` is now 150 (instead of the old default 200).
+3. **Time Check**: View the order on the customer app. Verify the "Order Time" matches your current phone's time (Kenya Time).
+4. **Complete Delivery**: As a rider, accept and deliver the order.
+5. **Earnings Audit**: Check the "Earnings" screen. Verify the payout matches the 150 `delivery_fee`.
+6. **Chat Time**: Send a chat message and verify the timestamp matches your local time exactly.

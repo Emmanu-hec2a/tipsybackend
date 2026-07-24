@@ -359,6 +359,8 @@ class OrderSerializer(serializers.ModelSerializer):
     customer_image = serializers.SerializerMethodField()
     rider_name = serializers.SerializerMethodField()
     rider_image = serializers.SerializerMethodField()
+    rider_phone = serializers.CharField(source='assigned_rider.phone', read_only=True)
+    rider_rating = serializers.DecimalField(source='assigned_rider.avg_rating', max_digits=3, decimal_places=1, read_only=True)
     
     # Rider current location
     rider_latitude = serializers.SerializerMethodField()
@@ -480,7 +482,7 @@ class OrderSerializer(serializers.ModelSerializer):
             'google_maps_link', 'created_at', 'items', 'delivery_fee', 'tip_amount',
             'promo_code', 'discount_amount',
             'store_name', 'store_latitude', 'store_longitude',
-            'rider_latitude', 'rider_longitude',
+            'rider_latitude', 'rider_longitude', 'rider_phone', 'rider_rating',
             'requires_rider_verification', 'rider_verified_at', 'rider_verification_method', 'verification_image_url',
             'has_unread_messages'
         ]

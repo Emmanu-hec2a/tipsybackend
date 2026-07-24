@@ -661,6 +661,7 @@ class CustomerPlaceOrderView(APIView):
                     store=store,
                     subtotal=subtotal,
                     delivery_fee=delivery_fee,
+                    rider_base_fare=delivery_fee, # 💰 Align rider pay with delivery fee
                     promo_code=promo_code if discount_amount > 0 else None,
                     discount_amount=discount_amount,
                     total=total,
