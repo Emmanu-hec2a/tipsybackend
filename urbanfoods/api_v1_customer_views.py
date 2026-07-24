@@ -296,14 +296,18 @@ class OrderChatMessagesView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         order_id = self.kwargs.get('order_id')
-        # Security: Customer or Rider must be part of the order
+        # Security: User must be part of the order
         user = self.request.user
         queryset = ChatMessage.objects.filter(order_id=order_id)
         
+        # Flexible participant check: Allow customer, assigned rider, or the store owner
         if user.role == 'customer':
             queryset = queryset.filter(order__user=user)
         elif user.role == 'rider':
             queryset = queryset.filter(order__assigned_rider=user)
+        elif user.role == 'partner':
+            # Partners can view chats for their store's orders
+            queryset = queryset.filter(order__store__owner=user)
         else:
             return ChatMessage.objects.none()
             
@@ -319,20 +323,28 @@ class OrderChatMessagesView(generics.ListCreateAPIView):
         order_id = self.kwargs.get('order_id')
         order = get_object_or_404(Order, id=order_id)
         
-        # Security: Sender must be the customer or the assigned rider
-        if self.request.user != order.user and self.request.user != order.assigned_rider:
+        # Security: Sender must be authorized (Customer, Assigned Rider, or Store Owner)
+        is_authorized = (
+            self.request.user == order.user or 
+            self.request.user == order.assigned_rider or
+            (order.store and self.request.user == order.store.owner)
+        )
+        
+        if not is_authorized:
+            logger.warning(f"Unauthorized chat attempt by user {self.request.user.id} for order {order_id}")
             raise permissions.PermissionDenied("You are not authorized to message on this order.")
 
-        # Security: If no rider is assigned, customer cannot message
-        # Use simple presence check for assigned_rider
-        if order.assigned_rider is None and self.request.user.role == 'customer':
+        # Business Rule: Customer cannot message if no rider is assigned yet
+        if self.request.user.role == 'customer' and order.assigned_rider is None:
             from rest_framework.exceptions import ValidationError
-            raise ValidationError({'error': 'No rider assigned to this order yet.'})
+            raise ValidationError({'error': 'no_rider', 'message': 'No rider assigned to this order yet.'})
 
         msg = serializer.save(order=order, sender=self.request.user)
         
         # Trigger FCM Notification to the other party
+        # If customer sends, notify rider. If rider sends, notify customer.
         recipient = order.assigned_rider if self.request.user == order.user else order.user
+        
         if recipient:
             from .utils import send_fcm_notification
             send_fcm_notification(
