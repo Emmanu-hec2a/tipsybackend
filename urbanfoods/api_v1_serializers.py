@@ -651,7 +651,7 @@ class ChatMessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatMessage
         fields = ['id', 'order', 'sender', 'sender_name', 'sender_role', 'sender_image', 'message', 'is_read', 'created_at']
-        read_only_fields = ['sender', 'is_read', 'created_at']
+        read_only_fields = ['order', 'sender', 'is_read', 'created_at']
 
     def get_sender_image(self, obj):
         if obj.sender.profile_picture:
