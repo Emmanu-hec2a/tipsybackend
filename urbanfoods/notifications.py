@@ -429,225 +429,140 @@ Tipsy Theoryy
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             body {{
-                margin: 0;
-                padding: 0;
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
                 background-color: #f3f4f6;
-                min-height: 100vh;
+                margin: 0;
+                padding: 40px 20px;
+                color: #1f2937;
             }}
             .container {{
-                max-width: 700px;
-                margin: 20px auto;
-                padding: 20px;
-            }}
-            .card {{
-                background: #ffffff;
-                border-radius: 16px;
-                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                max-width: 600px;
+                margin: 0 auto;
+                background-color: #ffffff;
+                border-radius: 24px;
                 overflow: hidden;
+                box-shadow: 0 4px 25px rgba(0,0,0,0.05);
             }}
-            .gradient-header {{
-                background: linear-gradient(135deg, #ea580c, #dc2626);
-                padding: 30px;
+            .header {{
+                background-color: #0d3b30;
+                padding: 40px;
                 text-align: center;
-            }}
-            .gradient-header h1 {{
                 color: #ffffff;
+            }}
+            .header h1 {{
                 margin: 0;
                 font-size: 28px;
-                font-weight: 700;
+                font-weight: 800;
             }}
-            .gradient-header p {{
-                color: #ffffff;
-                margin: 10px 0 0 0;
-                font-size: 16px;
-                opacity: 0.95;
+            .header p {{
+                margin: 8px 0 0 0;
+                font-size: 14px;
+                opacity: 0.8;
+                font-weight: 500;
             }}
             .content {{
-                padding: 30px;
-                color: #1f2937;
+                padding: 40px;
             }}
-            .info-card {{
-                background: #f9fafb;
-                border: 1px solid #e5e7eb;
-                border-radius: 12px;
-                padding: 20px;
-                margin: 20px 0;
+            .greeting {{
+                font-size: 20px;
+                font-weight: 700;
+                margin-bottom: 12px;
             }}
-            .info-card h2 {{
-                color: #ea580c;
-                margin: 0 0 15px 0;
-                font-size: 22px;
+            .message {{
+                line-height: 1.6;
+                color: #4b5563;
+                margin-bottom: 32px;
             }}
-            .section-header {{
-                color: #2563eb;
-                margin: 30px 0 15px 0;
-                font-size: 18px;
-                border-bottom: 2px solid #2563eb;
-                padding-bottom: 8px;
-            }}
-            .modern-table {{
-                border-collapse: collapse;
-                width: 100%;
-                margin: 20px 0;
-                border-radius: 12px;
-                overflow: hidden;
-                border: 1px solid #e5e7eb;
-            }}
-            .modern-table th {{
-                background: #f3f4f6;
-                padding: 15px;
-                text-align: left;
-                font-weight: 600;
-                color: #374151;
-                border-bottom: 2px solid #e5e7eb;
-            }}
-            .modern-table td {{
-                padding: 12px;
-                border-bottom: 1px solid #f3f4f6;
-                color: #1f2937;
-            }}
-            .modern-table tbody tr:hover {{
+            .detail-section {{
                 background-color: #f9fafb;
+                border-radius: 16px;
+                padding: 24px;
+                margin-bottom: 32px;
             }}
-            .total-row {{
-                background: linear-gradient(135deg, #ea580c, #dc2626);
+            .detail-row {{
+                display: flex;
+                justify-content: space-between;
+                padding: 8px 0;
+                border-bottom: 1px solid #f1f5f9;
             }}
-            .total-row td {{
-                color: #ffffff !important;
+            .detail-row:last-child {{
                 border-bottom: none;
-                padding: 18px;
-                font-size: 18px;
-                font-weight: bold;
             }}
-            .modern-btn {{
+            .detail-label {{
+                color: #64748b;
+                font-weight: 600;
+                font-size: 13px;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }}
+            .detail-value {{
+                font-weight: 700;
+                color: #0f172a;
+            }}
+            .cta-container {{
+                text-align: center;
+                margin: 40px 0;
+            }}
+            .btn {{
                 display: inline-block;
-                padding: 15px 30px;
-                background: linear-gradient(135deg, #ea580c, #dc2626);
-                color: #ffffff;
+                padding: 16px 36px;
+                background-color: #0d3b30;
+                color: #ffffff !important;
                 text-decoration: none;
-                border-radius: 12px;
-                font-weight: 600;
+                border-radius: 100px;
+                font-weight: 700;
                 font-size: 16px;
-                box-shadow: 0 4px 15px rgba(234, 88, 12, 0.3);
-            }}
-            .help-card {{
-                background: #dbeafe;
-                border: 1px solid #3b82f6;
-                border-radius: 12px;
-                padding: 20px;
-                margin: 20px 0;
-            }}
-            .help-card p {{
-                margin: 0;
-            }}
-            .help-card p:first-child {{
-                color: #1e40af;
-                font-weight: 600;
-                font-size: 16px;
-                margin-bottom: 8px;
-            }}
-            .help-card p:last-child {{
-                color: #1f2937;
+                transition: transform 0.2s ease;
             }}
             .footer {{
+                padding: 32px;
                 text-align: center;
-                margin-top: 30px;
-                padding-top: 20px;
-                border-top: 1px solid #e5e7eb;
-            }}
-            .footer p {{
-                color: #6b7280;
+                border-top: 1px solid #f1f5f9;
+                color: #94a3b8;
                 font-size: 12px;
-                margin: 0;
-            }}
-            .highlight {{
-                color: #ea580c;
-                font-weight: 600;
-            }}
-            .success {{
-                color: #10b981;
-                font-weight: 600;
-            }}
-            .info {{
-                color: #2563eb;
-                font-weight: 600;
-            }}
-            strong {{
-                color: #374151;
             }}
         </style>
     </head>
     <body>
         <div class="container">
-            <div class="card">
-                <div class="gradient-header">
-                    <h1>🎉 Order Confirmed!</h1>
-                    <p>Thank you for choosing Tipsy Theoryy</p>
+            <div class="header">
+                <h1>Order Confirmed!</h1>
+                <p>Thank you for choosing Tipsy Theoryy</p>
+            </div>
+            <div class="content">
+                <div class="greeting">Hi {order.user.get_full_name() or order.user.username},</div>
+                <p class="message">Your order #{order.order_number} has been received and is now being prepared. We'll notify you as soon as it's out for delivery.</p>
+                
+                <div class="detail-section">
+                    <div class="detail-row">
+                        <span class="detail-label">Address</span>
+                        <span class="detail-value">{order.address_string or 'Pin Location'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Phone</span>
+                        <span class="detail-value">{order.phone_number}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Total</span>
+                        <span class="detail-value" style="color: #0d3b30;">KES {order.total}</span>
+                    </div>
                 </div>
 
-                <div class="content">
-                    <p style="font-size: 18px; margin: 0 0 20px 0;">Hi <strong class="highlight">{order.user.get_full_name() or order.user.username}</strong>,</p>
-                    <p style="color: #4b5563; margin: 0 0 30px 0; line-height: 1.6;">Your order has been received and is being processed. Here are your order details:</p>
+                <div class="cta-container">
+                    <a href="tipsytheoryy://order/{order.id}" class="btn">Track Your Order →</a>
+                </div>
 
-                    <div class="info-card">
-                        <h2>Order #{order.order_number}</h2>
-                        <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-                            <div><strong>Date:</strong> <span class="info">{timezone.localtime(order.created_at).strftime('%B %d, %Y')}</span></div>
-                            <div><strong>Time:</strong> <span class="info">{timezone.localtime(order.created_at).strftime('%I:%M %p')}</span></div>
-                            <div><strong>Status:</strong> <span class="highlight">{safe_upper(order.status)}</span></div>
-                        </div>
-                    </div>
-
-                    <h3 class="section-header">📍 Delivery Details</h3>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; color: #1f2937;">
-                        <div><strong>Hostel:</strong><br>{order.hostel}</div>
-                        <div><strong>Room:</strong><br>{order.room_number}</div>
-                        <div><strong>Phone:</strong><br>{order.phone_number}</div>
-                        <div><strong>ETA:</strong><br><span class="success">15 mins</span></div>
-                    </div>
-
-                    <h3 class="section-header">🛒 Order Items</h3>
-                    <table class="modern-table">
-                        <thead>
-                            <tr>
-                                <th>Item</th>
-                                <th style="text-align: center;">Qty</th>
-                                <th style="text-align: right;">Price</th>
-                                <th style="text-align: right;">Total</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {items_html}
-                            <tr style="background: #f9fafb;">
-                                <td colspan="3" style="text-align: right; font-weight: bold;">Subtotal:</td>
-                                <td style="text-align: right; font-weight: bold; color: #ea580c;">KES {order.subtotal}</td>
-                            </tr>
-                            <tr style="background: #f9fafb;">
-                                <td colspan="3" style="text-align: right;">Delivery Fee:</td>
-                                <td style="text-align: right;">KES {order.delivery_fee}</td>
-                            </tr>
-                            <tr class="total-row">
-                                <td colspan="3" style="text-align: right;">TOTAL:</td>
-                                <td style="text-align: right;">KES {order.total}</td>
-                            </tr>
-                        </tbody>
-                    </table>
-
-                    <div style="margin: 20px 0; color: #1f2937;"><strong>Payment Method:</strong> <span class="highlight">{safe_upper(order.payment_method)}</span></div>
-
-                    {payment_html}
-
-                    <div style="text-align: center; margin: 40px 0;">
-                        <a href="{settings.SITE_URL}/orders/" class="modern-btn">
-                            📍 Track Your Order →
-                        </a>
-                    </div>
-
-                    <div class="help-card">
-                        <p>💡 Need Help?</p>
-                        <p>If you have any questions about your order, please contact our support team. | Call 0110345054</p>
-                    </div>
+                <p style="text-align: center; font-size: 12px; color: #94a3b8; margin-top: 40px;">
+                    Questions? Reply to this email or call 0110345054
+                </p>
+            </div>
+            <div class="footer">
+                &copy; {timezone.now().year} Tipsy Theoryy. All rights reserved.
+            </div>
+        </div>
+    </body>
+    </html>
+    """
 
                     <div class="footer">
                         <p>

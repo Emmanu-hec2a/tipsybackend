@@ -635,8 +635,17 @@ class CustomerPlaceOrderView(APIView):
                     else:
                         logger.warning(f"Invalid promo code provided: {promo_code}")
 
-                # Dynamic delivery fee from store
-                delivery_fee = store.delivery_fee
+                # 🛡️ DYNAMIC DELIVERY FEE Logic
+                # Instead of the legacy store.delivery_fee, we calculate it based on distance
+                from .utils import calculate_delivery_fee
+                delivery_fee = calculate_delivery_fee(
+                    data.get('latitude'), 
+                    data.get('longitude'), 
+                    store.latitude, 
+                    store.longitude, 
+                    store=store
+                )
+
                 total = float(subtotal) + float(delivery_fee) - discount_amount
                 
                 # 👛 Tipsy Wallet Logic
