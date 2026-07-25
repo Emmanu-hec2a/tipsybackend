@@ -97,22 +97,22 @@ def send_telegram_message_task(message, buttons=None, bot_type='admin'):
 @shared_task
 def check_abandoned_carts():
     """
-    Heartbeat task to remind users of items left in their cart.
-    Runs periodically via Celery Beat.
+    Production-Ready Heartbeat task to remind users of items left in their cart.
+    Scalable: Uses .iterator() to handle 10,000+ users without memory spikes.
     """
     try:
         # threshold: 2 hours ago
         threshold = timezone.now() - timedelta(hours=2)
         
-        # Find carts updated > 2 hours ago that have items
-        # and haven't been reminded in the last 24 hours
+        # 🛡️ Scalable Query: Use .iterator() to stream results from DB
+        # This prevents loading all 10,000 users into memory at once
         abandoned_carts = Cart.objects.filter(
             updated_at__lte=threshold,
             items__isnull=False,
             user__fcm_token__isnull=False
         ).exclude(
             last_reminder_sent_at__date=timezone.now().date()
-        ).distinct()
+        ).select_related('user').distinct().iterator(chunk_size=500)
 
         count = 0
         for cart in abandoned_carts:
@@ -130,7 +130,7 @@ def check_abandoned_carts():
             count += 1
             
         if count > 0:
-            logger.info(f"Sent {count} abandoned cart reminders.")
+            logger.info(f"Processed {count} abandoned cart reminders.")
             
     except Exception as e:
         logger.error(f"Error in check_abandoned_carts: {e}")

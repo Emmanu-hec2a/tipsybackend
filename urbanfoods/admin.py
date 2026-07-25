@@ -50,6 +50,12 @@ class FoodItemAdmin(ModelAdmin):
         }),
     )
 
+@admin.register(HighRiskZone)
+class HighRiskZoneAdmin(ModelAdmin):
+    list_display = ('name', 'latitude', 'longitude', 'radius_meters', 'is_active', 'created_at')
+    list_filter = ('is_active',)
+    search_fields = ('name',)
+
 @admin.register(Order)
 class OrderAdmin(ModelAdmin):
     list_display = ('order_number', 'user', 'store_type', 'status', 'assigned_rider', 'total', 'payment_method', 'payment_status', 'payment_type', 'mpesa_receipt_number', 'payment_completed_at', 'created_at')

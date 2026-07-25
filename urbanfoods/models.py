@@ -54,6 +54,18 @@ class User(AbstractUser):
     def __str__(self):
         return self.username
 
+class HighRiskZone(models.Model):
+    """Geofenced high-risk zones like schools, universities, or high-incident areas."""
+    name = models.CharField(max_length=200)
+    latitude = models.DecimalField(max_digits=9, decimal_places=6)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    radius_meters = models.IntegerField(default=500, help_text="Radius in meters to trigger verification")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.radius_meters}m)"
+
 class PasswordResetToken(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='password_reset_tokens')
     token = models.CharField(max_length=6)

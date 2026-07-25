@@ -45,6 +45,15 @@ class CustomerProfileView(APIView):
         return Response(serializer.data)
 
     def patch(self, request):
+        # 🛡️ AI Face Guard: Cross-verify selfie content
+        selfie = request.FILES.get('profile_picture')
+        if selfie and request.data.get('is_age_verified') == 'true':
+            from .ai_utils import validate_face_in_image
+            is_valid, msg = validate_face_in_image(selfie)
+            if not is_valid:
+                logger.warning(f"AI Face Guard Blocked {request.user.username}: {msg}")
+                return Response({'error': 'verification_failed', 'message': msg}, status=status.HTTP_400_BAD_REQUEST)
+
         serializer = UserSerializer(request.user, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -520,20 +529,22 @@ class CustomerPlaceOrderView(APIView):
     def post(self, request):
         # 🛡️ Age Verification Guard
         user = request.user
+        risk = calculate_risk_score(user, request.data)
+        user.risk_score = risk
+        user.save(update_fields=['risk_score'])
+
         if not user.is_age_verified:
-            # Check if this specific order requires immediate verification
-            # (High value or High risk profile)
-            risk = calculate_risk_score(user, request.data)
-            user.risk_score = risk
-            user.save(update_fields=['risk_score'])
-            
-            if risk >= 70: # High threshold for immediate block/escalation
+            # 🚀 Progressive Friction: 
+            # If risk is VERY high (85+), block immediately.
+            # If risk is Moderate (40-84), allow payment BUT mark order for Post-Order Verification.
+            if risk >= 85:
                 return Response({
                     'error': 'age_verification_required',
                     'message': 'Quick check to continue! Please verify your age to complete this order.',
-                    'risk_score': risk
+                    'risk_score': risk,
+                    'is_immediate': True
                 }, status=status.HTTP_403_FORBIDDEN)
-
+            
         data = request.data
         items_data = data.get('items', [])
         if not items_data:
@@ -646,10 +657,9 @@ class CustomerPlaceOrderView(APIView):
 
                 if total < 0: total = 0
 
-                # 🛡️ Tiered Verification Logic
-                risk = calculate_risk_score(request.user, data)
-                # Auto-require for high-value (>15k) OR medium-risk users
-                requires_verification = (subtotal >= 15000) or (risk >= 40)
+                # 🛡️ Tiered Verification Logic (Progressive Friction)
+                # Auto-require for high-value (>15k) OR users flagged by risk engine
+                requires_verification = (subtotal >= 15000) or (not user.is_age_verified and risk >= 40)
 
                 # Initial status is 'payment_pending' if M-Pesa is used, otherwise 'pending' for Cash
                 initial_status = 'pending'

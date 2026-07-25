@@ -631,32 +631,42 @@ def check_and_notify_low_stock():
 def calculate_risk_score(user, order_data):
     """
     Intelligently calculate a risk score (0-100) for a transaction.
-    Factors: Order Value, Location, Behavior Signals.
+    Factors: Geofencing, Order Value, Location, Behavior Signals.
     """
     score = 0
+    lat = order_data.get('latitude')
+    lng = order_data.get('longitude')
+
+    # 1. Geofencing (High-Risk Zones like Schools/Universities)
+    if lat and lng:
+        from .models import HighRiskZone
+        active_zones = HighRiskZone.objects.filter(is_active=True)
+        for zone in active_zones:
+            dist_m = haversine_distance_km(float(lat), float(lng), float(zone.latitude), float(zone.longitude)) * 1000
+            if dist_m <= zone.radius_meters:
+                score += 50 # High trigger for school zones
+                break
     
-    # 1. Order Value Signal
+    # 2. Order Value Signal
     total = float(order_data.get('total', 0))
     if total > 20000: # Very High Value (e.g., $150+)
         score += 40
     elif total > 5000: # High Value
         score += 20
         
-    # 2. Silent Sentry Signal (Interaction Speed)
+    # 3. Silent Sentry Signal (Interaction Speed)
     meta = user.verification_metadata or {}
     picker_ms = meta.get('picker_interaction_ms', 5000)
     if picker_ms < 1500: # Suspiciously fast DOB entry
         score += 30
         
-    # 3. Location Intelligence (Near High-Risk Areas like Schools)
-    # Note: In production, you'd match coords against a DB of schools.
-    # For now, we flag specific high-risk area strings.
+    # 4. Keyword Intelligence (Legacy fallback/Complementary)
     address = str(order_data.get('address_string', '')).lower()
     high_risk_keywords = ['school', 'university', 'campus', 'college', 'hostel']
     if any(keyword in address for keyword in high_risk_keywords):
-        score += 30
+        score += 20
         
-    # 4. Account Age
+    # 5. Account Age
     if (timezone.now() - user.date_joined).days < 1: # Brand new account
         score += 15
 
