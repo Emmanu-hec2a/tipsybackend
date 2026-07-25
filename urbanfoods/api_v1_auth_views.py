@@ -147,14 +147,15 @@ class VerifyPasswordResetView(APIView):
         if not email or not otp or not new_password:
             return Response({'error': 'Email, OTP, and new password are required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        user = User.objects.filter(email=email).first()
+        user = User.objects.filter(email__iexact=email).first()
         if not user:
             return Response({'error': 'Invalid request'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check most recent valid token
+        # Check most recent valid token (using __iexact for email and stripping OTP)
+        clean_otp = str(otp).strip()
         reset_token = PasswordResetToken.objects.filter(
             user=user, 
-            token=otp, 
+            token=clean_otp, 
             is_used=False,
             expires_at__gt=timezone.now()
         ).last()
@@ -401,14 +402,15 @@ class VerifyPasswordResetView(APIView):
         if not email or not otp or not new_password:
             return Response({'error': 'Email, OTP, and new password are required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        user = User.objects.filter(email=email).first()
+        user = User.objects.filter(email__iexact=email).first()
         if not user:
             return Response({'error': 'Invalid request'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check most recent valid token
+        # Check most recent valid token (using __iexact for email and stripping OTP)
+        clean_otp = str(otp).strip()
         reset_token = PasswordResetToken.objects.filter(
             user=user, 
-            token=otp, 
+            token=clean_otp,
             is_used=False,
             expires_at__gt=timezone.now()
         ).last()
