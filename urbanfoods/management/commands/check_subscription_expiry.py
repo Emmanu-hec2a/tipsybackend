@@ -3,6 +3,9 @@ from urbanfoods.models import Store
 from datetime import date
 import requests
 from django.conf import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 def send_telegram(chat_id, message):
     if not chat_id:
@@ -17,7 +20,7 @@ def send_telegram(chat_id, message):
     try:
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"Error sending telegram: {e}")
+        logger.error(f"Error sending telegram: {e}")
 
 class Command(BaseCommand):
     help = 'Check store subscription expiry and send reminders'

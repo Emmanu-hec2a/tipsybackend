@@ -283,7 +283,7 @@ def add_to_cart(request):
         defaults={'quantity': quantity}
     )
 
-    print("USER:", request.user, request.user.is_authenticated)
+    logger.debug(f"USER: {request.user} {request.user.is_authenticated}")
 
     if not created:
         cart_item.quantity += quantity

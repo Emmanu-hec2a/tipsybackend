@@ -78,7 +78,7 @@ def is_within_delivery_zone(store, lat, lng):
     return distance <= store.delivery_radius_km, round(distance, 2)
 
 VAPID_PRIVATE_KEY = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgfWfJbjUWsfxd1GxLRwsiVoMo/T5nbZTZKKpa1WUnNA+hRANCAAT9nGX9yf5vW6dwFkKkn6s8rTsIGKiHBwSrGubbo98BtVVfrkwkSMp3v1S9koIv6JigRJ9vLRYFU0b5Zzk3mfdB"
-VAPID_CLAIMS = {"sub": "mailto:petniqueke@gmail.com"}
+VAPID_CLAIMS = {"sub": "mailto:support@s.tipsytheoryy.com"}
 
 def send_push_to_all(title, body, url="/"):
     subscriptions = PushSubscription.objects.all()
@@ -94,7 +94,7 @@ def send_push_to_all(title, body, url="/"):
                 vapid_claims=VAPID_CLAIMS
             )
         except Exception as e:
-            print("Push failed for subscription:", sub.endpoint, e)
+            logger.error(f"Push failed for subscription: {sub.endpoint} {e}")
 
 # utils.py
 import requests

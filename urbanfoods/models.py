@@ -8,6 +8,9 @@ from PIL import Image
 from io import BytesIO
 from django.core.files.base import ContentFile
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 class User(AbstractUser):
     class Role(models.TextChoices):
@@ -306,7 +309,7 @@ class FoodItem(models.Model):
                 
                 self.image.save(new_filename, ContentFile(buffer.read()), save=False)
             except Exception as e:
-                print(f"⚠️ Optimization skipped for {self.name}: {e}")
+                logger.error(f"⚠️ Optimization skipped for {self.name}: {e}")
         
         super().save(*args, **kwargs)
     

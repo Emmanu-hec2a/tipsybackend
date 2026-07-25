@@ -1,9 +1,12 @@
 import json
+import logging
 from django.utils import timezone
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from .models import Order, ChatMessage, User
 from .api_v1_serializers import ChatMessageSerializer
+
+logger = logging.getLogger(__name__)
 
 class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -110,5 +113,5 @@ class ChatConsumer(AsyncWebsocketConsumer):
             serializer = ChatMessageSerializer(msg)
             return serializer.data
         except Exception as e:
-            print(f"Error saving socket message: {e}")
+            logger.error(f"Error saving socket message: {e}")
             return None

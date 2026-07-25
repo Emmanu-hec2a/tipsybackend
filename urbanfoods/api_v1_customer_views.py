@@ -206,10 +206,11 @@ class CustomerProductListView(generics.ListAPIView):
         ).values('store').annotate(unpaid_count=Count('id')).filter(unpaid_count__gte=2).values_list('store_id', flat=True)
 
         # Base filter: products from active stores with valid subscriptions (or inherited franchise validity)
+        # 🛡️ Inventory Guard: Exclude products with 0 stock and only show available
         from django.db.models import Q
         queryset = FoodItem.objects.filter(
-            Q(is_active=True, store__is_active=True, store__billing_status='active', store__subscription_expires__gte=date.today()) |
-            Q(is_active=True, store__is_active=True, store__is_franchise=True, store__parent_store__billing_status='active', store__parent_store__subscription_expires__gte=date.today())
+            Q(is_active=True, is_available=True, stock__gt=0, store__is_active=True, store__billing_status='active', store__subscription_expires__gte=date.today()) |
+            Q(is_active=True, is_available=True, stock__gt=0, store__is_active=True, store__is_franchise=True, store__parent_store__billing_status='active', store__parent_store__subscription_expires__gte=date.today())
         ).exclude(store_id__in=restricted_store_ids).order_by('-store__is_pro', 'name')
         
         store_id = self.request.query_params.get('store_id')
@@ -581,7 +582,7 @@ class CustomerPlaceOrderView(APIView):
                             'radius': store.delivery_radius_km
                         }, status=status.HTTP_400_BAD_REQUEST)
 
-                # Calculate totals and validate single store
+                # Calculate totals and validate single store and stock
                 subtotal = 0
                 order_items_to_create = []
                 for item in items_data:
@@ -593,14 +594,24 @@ class CustomerPlaceOrderView(APIView):
                             status=status.HTTP_400_BAD_REQUEST
                         )
 
-                    quantity = item.get('quantity', 1)
-                    subtotal += food_item.price * quantity
+                    requested_quantity = item.get('quantity', 1)
+                    
+                    # 🛡️ Stock Validation: Only charge for what is in stock
+                    actual_quantity = min(requested_quantity, food_item.stock)
+                    
+                    if actual_quantity <= 0:
+                        continue # Skip items that went out of stock
+                    
+                    subtotal += food_item.price * actual_quantity
                     
                     order_items_to_create.append(OrderItem(
                         food_item=food_item,
-                        quantity=quantity,
+                        quantity=actual_quantity,
                         price_at_order=food_item.price
                     ))
+
+                if not order_items_to_create:
+                    return Response({'error': 'All items in your cart are currently out of stock.'}, status=status.HTTP_400_BAD_REQUEST)
 
                 # Handle Promotion
                 promo_code = data.get('promo_code')

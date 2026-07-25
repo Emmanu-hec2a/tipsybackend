@@ -1,7 +1,10 @@
 # urbanfoods/notifications.py
+import logging
 from django.core.mail import send_mail
 from django.conf import settings
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 local_time = timezone.localtime(timezone.now())
 
@@ -303,7 +306,7 @@ TipsyTheoryy Admin System
         )
         return True
     except Exception as e:
-        print(f"Failed to send admin notification email: {e}")
+        logger.error(f"Failed to send admin notification email: {e}")
         return False
 
 
@@ -589,6 +592,6 @@ Tipsy Theoryy
         )
         return True
     except Exception as e:
-        print(f"Failed to send customer confirmation email: {e}")
+        logger.error(f"Failed to send customer confirmation email: {e}")
         return False
         
