@@ -18,10 +18,10 @@ from .api_v1_serializers import (
     PromotionSerializer, ChatMessageSerializer,
     ShirikiSessionSerializer, ShirikiContributionSerializer
 )
-from django.db.models import Sum
-from django.utils import timezone
 import string
 import random
+from decimal import Decimal
+from django.db.models import Sum
 from .permissions import IsCustomer
 from .mpesa_utils import MpesaIntegration
 from django.utils.decorators import method_decorator
@@ -856,9 +856,15 @@ class ShirikiContributeView(APIView):
             
         # Initiate STK Push
         mpesa = MpesaIntegration(store=session.order.store)
+        formatted_phone = mpesa.format_phone_number(phone)
+        
+        # 🛡️ Fail-Closed Production Guard
+        is_production = str(os.environ.get('MPESA_PRODUCTION', 'false')).lower() == 'true'
+        stk_amount = int(amount) if is_production else 1
+
         response = mpesa.initiate_stk_push(
-            phone_number=phone,
-            amount=int(amount),
+            phone_number=formatted_phone,
+            amount=stk_amount,
             account_reference=session.order.order_number,
             transaction_desc=f"Shiriki {session.invite_code}"
         )
