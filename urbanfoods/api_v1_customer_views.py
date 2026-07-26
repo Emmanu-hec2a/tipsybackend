@@ -253,20 +253,35 @@ class CustomerOrderListView(generics.ListAPIView):
     permission_classes = [IsCustomer]
 
     def get_queryset(self):
-        return Order.objects.filter(user=self.request.user).order_by('-created_at')
+        # 🛡️ SHIRIKI GUARD: Include orders where user is host OR participant
+        return Order.objects.filter(
+            Q(user=self.request.user) | 
+            Q(shiriki_session__contributions__user=self.request.user, shiriki_session__contributions__status='confirmed')
+        ).distinct().order_by('-created_at')
 
 class CustomerOrderDetailView(generics.RetrieveAPIView):
     serializer_class = OrderSerializer
     permission_classes = [IsCustomer]
 
     def get_queryset(self):
-        return Order.objects.filter(user=self.request.user)
+        # 🛡️ SHIRIKI GUARD: Participants can see details too
+        return Order.objects.filter(
+            Q(user=self.request.user) | 
+            Q(shiriki_session__contributions__user=self.request.user, shiriki_session__contributions__status='confirmed')
+        ).distinct()
 
 class CustomerOrderPaymentStatusView(APIView):
     permission_classes = [IsCustomer]
 
     def get(self, request, pk):
-        order = get_object_or_404(Order, pk=pk, user=request.user)
+        # 🛡️ SHIRIKI GUARD: Allow access for participants
+        order = get_object_or_404(
+            Order.objects.filter(
+                Q(user=request.user) | 
+                Q(shiriki_session__contributions__user=request.user, shiriki_session__contributions__status='confirmed')
+            ).distinct(), 
+            pk=pk
+        )
         return Response({
             'order_id': order.id,
             'order_number': order.order_number,

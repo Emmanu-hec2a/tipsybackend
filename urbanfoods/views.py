@@ -729,8 +729,12 @@ def _confirm_payment(order, receipt_number=None, notes='Payment confirmed'):
     CartItem.objects.filter(cart__user=order.user).delete()
 
     # Loyalty
-    order.user.loyalty_points = F('loyalty_points') + int(order.total)
-    order.user.save(update_fields=['loyalty_points'])
+    # 🛡️ SHIRIKI GUARD: Only give points to host for the total if it's NOT a shiriki order.
+    # For Shiriki, points are given per contribution in mpesa_callback.
+    is_shiriki = ShirikiSession.objects.filter(order=order).exists()
+    if not is_shiriki:
+        order.user.loyalty_points = F('loyalty_points') + int(order.total)
+        order.user.save(update_fields=['loyalty_points'])
 
     OrderStatusHistory.objects.create(order=order, status='pending', notes=notes)
 
@@ -1061,6 +1065,17 @@ def mpesa_callback(request):
                 contribution.paid_at = timezone.now()
                 contribution.save()
                 
+                # 💎 LOYALTY: Give points to the contributor
+                contribution.user.loyalty_points = F('loyalty_points') + int(contribution.amount)
+                contribution.user.save(update_fields=['loyalty_points'])
+
+                # 🚀 CUSTOM NOTIFICATION: Notify Host of contribution
+                try:
+                    from .utils import notify_shiriki_contribution
+                    notify_shiriki_contribution(contribution)
+                except Exception as e:
+                    logger.error(f"Failed to send Shiriki contribution notification: {e}")
+
                 # Check if session is completed
                 session = contribution.session
                 total_paid = session.contributions.filter(status='confirmed').aggregate(Sum('amount'))['amount__sum'] or 0

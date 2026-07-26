@@ -489,6 +489,31 @@ Status: Completed ✅
     from .tasks import send_telegram_message_task
     return send_telegram_message_task.delay(message)
 
+def notify_shiriki_contribution(contribution):
+    """Notify Host that a friend has contributed to their pot."""
+    session = contribution.session
+    host = session.host
+    contributor_name = contribution.user.get_full_name() or contribution.user.username
+    
+    title = "Shiriki Contribution! 🍻"
+    body = f"{contributor_name} contributed KSh {contribution.amount} to your pot."
+    
+    # FCM to Host
+    from .tasks import send_lifecycle_notification_task
+    send_lifecycle_notification_task.delay(
+        host.id,
+        title,
+        body,
+        {
+            'type': 'shiriki_contribution',
+            'invite_code': session.invite_code,
+            'amount': str(contribution.amount)
+        }
+    )
+    
+    # Log it
+    logger.info(f"Shiriki Notify: {contributor_name} -> Host {host.username} for Pot {session.invite_code}")
+
 def notify_low_stock(product):
     """Send Telegram alert for a single low stock product"""
     threshold = getattr(product, 'low_stock_threshold', 2)
