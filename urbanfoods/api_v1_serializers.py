@@ -370,6 +370,10 @@ class OrderSerializer(serializers.ModelSerializer):
     rider_latitude = serializers.SerializerMethodField()
     rider_longitude = serializers.SerializerMethodField()
     has_unread_messages = serializers.SerializerMethodField()
+    is_shiriki = serializers.SerializerMethodField()
+
+    def get_is_shiriki(self, obj):
+        return ShirikiSession.objects.filter(order=obj).exists()
 
     def get_has_unread_messages(self, obj):
         request = self.context.get('request')
