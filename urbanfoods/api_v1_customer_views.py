@@ -197,13 +197,14 @@ class CustomerProductListView(generics.ListAPIView):
         from .models import WeeklyRevenueStat
         today = timezone.localdate()
         
+        # 🛡️ Debt Enforcement Guard: (Temporarily Disabled)
         # Identify stores that are restricted due to debt
-        # (This is a simplified check for performance, normally you'd use a flag or cache)
-        restricted_store_ids = WeeklyRevenueStat.objects.filter(
-            week_end__lt=today,
-            is_paid=False,
-            partner_share_40__gt=0
-        ).values('store').annotate(unpaid_count=Count('id')).filter(unpaid_count__gte=2).values_list('store_id', flat=True)
+        # restricted_store_ids = WeeklyRevenueStat.objects.filter(
+        #     week_end__lt=today,
+        #     is_paid=False,
+        #     partner_share_40__gt=0
+        # ).values('store').annotate(unpaid_count=Count('id')).filter(unpaid_count__gte=2).values_list('store_id', flat=True)
+        restricted_store_ids = [] # Empty list to disable filtering
 
         # Base filter: products from active stores with valid subscriptions (or inherited franchise validity)
         # 🛡️ Inventory Guard: Exclude products with 0 stock and only show available
