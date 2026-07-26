@@ -863,13 +863,13 @@ class ShirikiContributeView(APIView):
             transaction_desc=f"Shiriki {session.invite_code}"
         )
         
-        if response.get('ResponseCode') == '0':
+        if response.get('success'):
             contribution = ShirikiContribution.objects.create(
                 session=session,
                 user=request.user,
                 amount=amount,
                 phone_number=phone,
-                checkout_request_id=response.get('CheckoutRequestID'),
+                checkout_request_id=response.get('checkout_request_id'),
                 status='pending'
             )
             return Response({
