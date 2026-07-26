@@ -57,6 +57,9 @@ customer_patterns = [
     path('orders/<int:pk>/payment-status/', api_v1_customer_views.CustomerOrderPaymentStatusView.as_view(), name='customer_order_payment_status'),
     path('orders/<int:pk>/mpesa-query/', api_v1_customer_views.CustomerMpesaQueryView.as_view(), name='customer_order_mpesa_query'),
     path('orders/<int:pk>/rate/', api_v1_customer_views.CustomerRateOrderView.as_view(), name='customer_rate_order'),
+    path('shiriki/create/', api_v1_customer_views.ShirikiCreateView.as_view(), name='shiriki_create'),
+    path('shiriki/session/<str:invite_code>/', api_v1_customer_views.ShirikiSessionDetailView.as_view(), name='shiriki_detail'),
+    path('shiriki/contribute/', api_v1_customer_views.ShirikiContributeView.as_view(), name='shiriki_contribute'),
 ]
 
 auth_patterns = [

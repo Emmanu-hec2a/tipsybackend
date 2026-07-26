@@ -1,9 +1,12 @@
 from rest_framework import serializers
 from django.utils import timezone
 import datetime
-from .models import User, Store, Order, OrderItem, FoodItem, Rating, RiderEarning, FoodCategory, Promotion, SubscriptionPayment, SavedAddress, RiderLocationPing, ChatMessage
-
-from django.core.cache import cache
+from .models import (
+    User, Store, Order, OrderItem, FoodItem, Rating, RiderEarning, 
+    FoodCategory, Promotion, SubscriptionPayment, SavedAddress, 
+    RiderLocationPing, ChatMessage, ShirikiSession, ShirikiContribution
+)
+from django.db.models import Sum
 
 class UserSerializer(serializers.ModelSerializer):
     def validate_phone(self, value):
@@ -660,3 +663,29 @@ class ChatMessageSerializer(serializers.ModelSerializer):
                 return request.build_absolute_uri(obj.sender.profile_picture.url)
             return obj.sender.profile_picture.url
         return None
+
+class ShirikiContributionSerializer(serializers.ModelSerializer):
+    username = serializers.ReadOnlyField(source='user.get_full_name')
+    
+    class Meta:
+        model = ShirikiContribution
+        fields = ['id', 'username', 'amount', 'status', 'paid_at', 'created_at']
+
+class ShirikiSessionSerializer(serializers.ModelSerializer):
+    contributions = ShirikiContributionSerializer(many=True, read_only=True)
+    host_name = serializers.ReadOnlyField(source='host.get_full_name')
+    host_id = serializers.ReadOnlyField(source='host.id')
+    total_amount = serializers.ReadOnlyField(source='order.total')
+    amount_collected = serializers.SerializerMethodField()
+    order_details = OrderSerializer(source='order', read_only=True)
+
+    class Meta:
+        model = ShirikiSession
+        fields = [
+            'invite_code', 'status', 'host_name', 'host_id', 'total_amount',
+            'amount_collected', 'contributions', 'created_at', 
+            'expires_at', 'order_details'
+        ]
+
+    def get_amount_collected(self, obj):
+        return obj.contributions.filter(status='confirmed').aggregate(Sum('amount'))['amount__sum'] or 0

@@ -770,3 +770,39 @@ class SavedAddress(models.Model):
         if self.is_default:
             SavedAddress.objects.filter(user=self.user).update(is_default=False)
         super().save(*args, **kwargs)
+
+class ShirikiSession(models.Model):
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('completed', 'Completed'),
+        ('expired', 'Expired'),
+        ('cancelled', 'Cancelled'),
+    ]
+    order = models.OneToOneField('Order', on_delete=models.CASCADE, related_name='shiriki_session')
+    host = models.ForeignKey(User, on_delete=models.CASCADE, related_name='hosted_shiriki_sessions')
+    invite_code = models.CharField(max_length=10, unique=True, db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+
+    def __str__(self):
+        return f"Shiriki {self.invite_code} - {self.order.order_number}"
+
+class ShirikiContribution(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('confirmed', 'Confirmed'),
+        ('failed', 'Failed'),
+        ('refunded', 'Refunded'),
+    ]
+    session = models.ForeignKey(ShirikiSession, on_delete=models.CASCADE, related_name='contributions')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='shiriki_contributions')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    phone_number = models.CharField(max_length=15)
+    checkout_request_id = models.CharField(max_length=100, unique=True, db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.username} - {self.amount} for {self.session.invite_code}"

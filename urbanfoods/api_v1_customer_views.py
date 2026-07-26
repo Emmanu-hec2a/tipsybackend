@@ -7,8 +7,21 @@ import os
 from django.shortcuts import get_object_or_404
 from django.db.models import Q, F, ExpressionWrapper, DecimalField, Avg, Exists, OuterRef, Value, BooleanField, Count
 from django.db.models.functions import Sqrt, Power
-from .models import Store, FoodItem, Order, Rating, SavedAddress, OrderItem, OrderStatusHistory, FoodCategory, Promotion, ChatMessage
-from .api_v1_serializers import StoreSerializer, FoodItemSerializer, OrderSerializer, UserSerializer, SavedAddressSerializer, FoodCategorySerializer, PromotionSerializer, ChatMessageSerializer
+from .models import (
+    Store, FoodItem, Order, Rating, SavedAddress, OrderItem, 
+    OrderStatusHistory, FoodCategory, Promotion, ChatMessage,
+    ShirikiSession, ShirikiContribution, User
+)
+from .api_v1_serializers import (
+    StoreSerializer, FoodItemSerializer, OrderSerializer, 
+    UserSerializer, SavedAddressSerializer, FoodCategorySerializer, 
+    PromotionSerializer, ChatMessageSerializer,
+    ShirikiSessionSerializer, ShirikiContributionSerializer
+)
+from django.db.models import Sum
+from django.utils import timezone
+import string
+import random
 from .permissions import IsCustomer
 from .mpesa_utils import MpesaIntegration
 from django.utils.decorators import method_decorator
@@ -718,9 +731,11 @@ class CustomerPlaceOrderView(APIView):
 
                 response_data = OrderSerializer(order).data
 
+            is_shiriki = data.get('is_shiriki', False)
+
             # --- OUTSIDE TRANSACTION ---
-            # Trigger M-Pesa STK Push if method is mpesa and there is a balance
-            if order.payment_method == 'mpesa' and order.total > 0:
+            # Trigger M-Pesa STK Push if method is mpesa and there is a balance, AND not a Shiriki session
+            if order.payment_method == 'mpesa' and order.total > 0 and not is_shiriki:
                 logger.info(f"Triggering STK Push for Order {order.order_number} (ID: {order.id})")
                 try:
                     mpesa = MpesaIntegration(store=order.store)
@@ -766,3 +781,101 @@ class CustomerPlaceOrderView(APIView):
 
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class ShirikiCreateView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        order_number = request.data.get('order_number')
+        if not order_number:
+            return Response({'error': 'Order number required'}, status=400)
+            
+        try:
+            order = Order.objects.get(order_number=order_number, user=request.user, payment_status='pending')
+        except Order.DoesNotExist:
+            return Response({'error': 'Order not found or already paid'}, status=404)
+            
+        if ShirikiSession.objects.filter(order=order).exists():
+            return Response({'error': 'Shiriki session already exists for this order'}, status=400)
+            
+        # Generate unique invite code
+        invite_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        while ShirikiSession.objects.filter(invite_code=invite_code).exists():
+            invite_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+            
+        session = ShirikiSession.objects.create(
+            order=order,
+            host=request.user,
+            invite_code=f"TT-{invite_code}",
+            expires_at=timezone.now() + timezone.timedelta(minutes=30)
+        )
+        
+        return Response(ShirikiSessionSerializer(session).data, status=201)
+
+class ShirikiSessionDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, invite_code):
+        try:
+            session = ShirikiSession.objects.get(invite_code=invite_code)
+        except ShirikiSession.DoesNotExist:
+            return Response({'error': 'Session not found'}, status=404)
+            
+        return Response(ShirikiSessionSerializer(session).data)
+
+class ShirikiContributeView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        invite_code = request.data.get('invite_code')
+        amount = request.data.get('amount')
+        phone = request.data.get('phone')
+        
+        if not all([invite_code, amount, phone]):
+            return Response({'error': 'Missing required fields'}, status=400)
+            
+        try:
+            session = ShirikiSession.objects.get(invite_code=invite_code, status='active')
+        except ShirikiSession.DoesNotExist:
+            return Response({'error': 'Active session not found'}, status=404)
+            
+        # Validate amount
+        try:
+            amount = float(amount)
+            if amount <= 0:
+                raise ValueError
+        except ValueError:
+            return Response({'error': 'Invalid amount'}, status=400)
+            
+        # Check if amount exceeds remaining balance
+        current_confirmed = session.contributions.filter(status='confirmed').aggregate(Sum('amount'))['amount__sum'] or 0
+        remaining = float(session.order.total) - float(current_confirmed)
+        
+        if amount > (remaining + 0.01): # Small buffer for floating point
+            return Response({'error': f'Amount exceeds remaining balance of {remaining}'}, status=400)
+            
+        # Initiate STK Push
+        mpesa = MpesaIntegration(store=session.order.store)
+        response = mpesa.initiate_stk_push(
+            phone_number=phone,
+            amount=int(amount),
+            account_reference=session.order.order_number,
+            transaction_desc=f"Shiriki {session.invite_code}"
+        )
+        
+        if response.get('ResponseCode') == '0':
+            contribution = ShirikiContribution.objects.create(
+                session=session,
+                user=request.user,
+                amount=amount,
+                phone_number=phone,
+                checkout_request_id=response.get('CheckoutRequestID'),
+                status='pending'
+            )
+            return Response({
+                'success': True,
+                'checkout_request_id': contribution.checkout_request_id,
+                'message': 'STK Push initiated'
+            })
+        else:
+            return Response({'error': 'Failed to initiate payment'}, status=500)

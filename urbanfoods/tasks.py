@@ -1,7 +1,8 @@
 from celery import shared_task
 from .utils import send_fcm_notification, send_telegram_notification, send_telegram_message
-from .models import User, MarketingBlast, Store, Cart
+from .models import User, MarketingBlast, Store, Cart, ShirikiSession, ShirikiContribution
 from django.utils import timezone
+from django.db import transaction
 from datetime import timedelta
 import logging
 
@@ -171,3 +172,48 @@ def notify_new_arrival_task(product_id):
         logger.error(f"Product {product_id} not found for new arrival notification")
     except Exception as e:
         logger.error(f"Error in notify_new_arrival_task: {e}")
+
+@shared_task
+def check_expired_shiriki_sessions():
+    """Safety Net: Refund expired Shiriki sessions to user wallets."""
+    now = timezone.now()
+    expired_sessions = ShirikiSession.objects.filter(
+        status='active',
+        expires_at__lt=now
+    )
+    
+    count = 0
+    for session in expired_sessions:
+        try:
+            with transaction.atomic():
+                session.status = 'expired'
+                session.save()
+                
+                # Refund confirmed contributions to Tipsy Credit
+                contributions = session.contributions.filter(status='confirmed')
+                for contrib in contributions:
+                    user = contrib.user
+                    amount = contrib.amount
+                    
+                    # Add to wallet
+                    user.wallet_balance += amount
+                    user.save()
+                    
+                    # Mark as refunded
+                    contrib.status = 'refunded'
+                    contrib.save()
+                    
+                    # Notify User
+                    title = "Shiriki Session Expired"
+                    body = f"The pot for {session.order.order_number} didn't fill up. KSh {amount} has been refunded to your Tipsy Credit. 🥂"
+                    send_fcm_notification(user, title, body, data={"type": "wallet_refund"})
+                
+                # Cancel the original order
+                session.order.status = 'cancelled'
+                session.order.save()
+                
+                count += 1
+        except Exception as e:
+            logger.error(f"Failed to process expiry for Shiriki Session {session.invite_code}: {e}")
+
+    return f"Processed {count} expired Shiriki sessions"

@@ -989,16 +989,27 @@ def mpesa_callback(request):
             order = Order.objects.select_related('user').get(
                 mpesa_checkout_request_id=checkout_request_id
             )
+            contribution = None
         except Order.DoesNotExist:
-            logger.warning(
-                "Callback received for unknown CheckoutRequestID: %s",
-                checkout_request_id,
-            )
-            return HttpResponse("OK")
+            # 🛡️ Shiriki Pay Path: Check for individual contributions
+            try:
+                contribution = ShirikiContribution.objects.select_related('session__order', 'user').get(
+                    checkout_request_id=checkout_request_id
+                )
+                order = contribution.session.order
+            except ShirikiContribution.DoesNotExist:
+                logger.warning(
+                    "Callback received for unknown CheckoutRequestID: %s",
+                    checkout_request_id,
+                )
+                return HttpResponse("OK")
 
         # ── Idempotency guard ──
-        if order.payment_status == 'paid':
+        if not contribution and order.payment_status == 'paid':
             return HttpResponse("OK")
+        
+        if contribution and contribution.status == 'confirmed':
+             return HttpResponse("OK")
 
         # ── Parse callback metadata ──
         metadata = stk_callback.get('CallbackMetadata', {}).get('Item', [])
@@ -1036,9 +1047,37 @@ def mpesa_callback(request):
 
         # ── Payment failed ──
         if result_code != 0:
-            _fail_payment(order, reason=result_desc)
+            if contribution:
+                contribution.status = 'failed'
+                contribution.save()
+            else:
+                _fail_payment(order, reason=result_desc)
             return HttpResponse("OK")
 
+        # ── Shiriki Contribution Logic ──
+        if contribution:
+            with transaction.atomic():
+                contribution.status = 'confirmed'
+                contribution.paid_at = timezone.now()
+                contribution.save()
+                
+                # Check if session is completed
+                session = contribution.session
+                total_paid = session.contributions.filter(status='confirmed').aggregate(Sum('amount'))['amount__sum'] or 0
+                
+                if total_paid >= (session.order.total - Decimal('0.01')): # Buffer for rounding
+                    session.status = 'completed'
+                    session.save()
+                    
+                    # Finalize the whole order
+                    _confirm_payment(
+                        session.order,
+                        receipt_number=mpesa_receipt,
+                        notes=f'Shiriki Pot completed. Final receipt: {mpesa_receipt}',
+                    )
+            return HttpResponse("OK")
+
+        # ── Standard Single Payment Logic ──
         # ── Validate amount ──
         is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
         received_amount = Decimal(str(amount))
