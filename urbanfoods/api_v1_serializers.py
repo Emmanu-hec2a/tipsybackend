@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.utils import timezone
+from django.core.cache import cache
 import datetime
 from .models import (
     User, Store, Order, OrderItem, FoodItem, Rating, RiderEarning, 
