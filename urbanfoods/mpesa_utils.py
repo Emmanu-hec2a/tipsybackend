@@ -170,7 +170,20 @@ class MpesaIntegration:
                 headers=headers,
                 timeout=20
             )
-            response.raise_for_status()
+            
+            # 🛡️ DEBUGGING: Capture 400 Bad Request error body
+            if response.status_code >= 400:
+                try:
+                    error_data = response.json()
+                    logger.error(f"Daraja STK Error {response.status_code}: {error_data}")
+                    return {
+                        "success": False, 
+                        "message": error_data.get('errorMessage', 'M-Pesa rejected the request')
+                    }
+                except:
+                    logger.error(f"Daraja STK Raw Error {response.status_code}: {response.text}")
+                    return {"success": False, "message": "M-Pesa service error"}
+
             result = response.json()
 
             if result.get("ResponseCode") == "0":
@@ -184,8 +197,8 @@ class MpesaIntegration:
                 "message": result.get("ResponseDescription", "STK push failed")
             }
         except Exception as e:
-            logger.exception("STK Push error")
-            return {"success": False, "message": str(e)}
+            logger.exception(f"Critical STK Push Exception: {e}")
+            return {"success": False, "message": "Connection to M-Pesa failed"}
 
     def query_stk_status(self, checkout_request_id):
         access_token = self.get_access_token()

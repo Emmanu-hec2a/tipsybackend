@@ -20,6 +20,7 @@ from .utils import haversine_distance_km
 from .tasks import send_marketing_blast_task
 from datetime import timedelta
 from django.shortcuts import get_object_or_404
+from django.core.cache import cache
 import logging
 import io
 from django.template.loader import get_template
