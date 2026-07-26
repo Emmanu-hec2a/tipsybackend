@@ -1,0 +1,106 @@
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; min-height: 100vh; }
+        .container { max-width: 700px; margin: 20px auto; padding: 20px; }
+        .card { background: #ffffff; border-radius: 16px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); overflow: hidden; }
+        .gradient-header { background: linear-gradient(135deg, #ea580c, #dc2626); padding: 30px; text-align: center; }
+        .gradient-header h1 { color: #ffffff; margin: 0; font-size: 28px; font-weight: 700; }
+        .gradient-header p { color: #ffffff; margin: 10px 0 0 0; font-size: 16px; opacity: 0.95; }
+        .content { padding: 30px; color: #1f2937; }
+        .info-card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; margin: 20px 0; }
+        .info-card h2 { color: #ea580c; margin: 0 0 15px 0; font-size: 22px; }
+        .section-header { color: #2563eb; margin: 30px 0 15px 0; font-size: 18px; border-bottom: 2px solid #2563eb; padding-bottom: 8px; }
+        .modern-table { border-collapse: collapse; width: 100%; margin: 20px 0; border-radius: 12px; overflow: hidden; border: 1px solid #e5e7eb; }
+        .modern-table th { background: #f3f4f6; padding: 15px; text-align: left; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; }
+        .modern-table td { padding: 12px; border-bottom: 1px solid #f3f4f6; color: #1f2937; }
+        .total-row { background: linear-gradient(135deg, #ea580c, #dc2626); }
+        .total-row td { color: #ffffff !important; border-bottom: none; padding: 18px; font-size: 18px; font-weight: bold; }
+        .modern-btn { display: inline-block; padding: 15px 30px; background: linear-gradient(135deg, #ea580c, #dc2626); color: #ffffff; text-decoration: none; border-radius: 12px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 15px rgba(234, 88, 12, 0.3); }
+        .footer { text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
+        .footer p { color: #6b7280; font-size: 12px; margin: 0; }
+        .highlight { color: #ea580c; font-weight: 600; }
+        .success { color: #10b981; font-weight: 600; }
+        .info { color: #2563eb; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="gradient-header">
+                <h1>🔔 New Order Alert!</h1>
+                <p>Fresh order just came in</p>
+            </div>
+            <div class="content">
+                <div class="info-card">
+                    <h2>Order #{{ order.order_number }}</h2>
+                    <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                        <div><strong>Store:</strong> <span class="info">{{ order.store.name }}</span></div>
+                        <div><strong>Status:</strong> <span class="highlight">{{ order.status|upper }}</span></div>
+                    </div>
+                </div>
+
+                <h3 class="section-header">👤 Customer Details</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                    <div><strong>Name:</strong><br>{{ order.user.get_full_name|default:order.user.username }}</div>
+                    <div><strong>Email:</strong><br>{{ order.user.email }}</div>
+                    <div><strong>Phone:</strong><br>{{ order.phone_number }}</div>
+                    <div><strong>Hostel:</strong><br>{{ order.hostel }}</div>
+                </div>
+
+                <h3 class="section-header">📍 Delivery Info</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                    <div><strong>Room:</strong><br>{{ order.room_number }}</div>
+                    <div><strong>Notes:</strong><br>{{ order.delivery_notes|default:"None" }}</div>
+                    <div><strong>ETA:</strong><br><span class="success">15-30 mins</span></div>
+                    <div><strong>Payment:</strong><br><span class="highlight">{{ order.payment_method|upper }}</span></div>
+                </div>
+
+                <h3 class="section-header">🛒 Order Items</h3>
+                <table class="modern-table">
+                    <thead>
+                        <tr>
+                            <th>Item</th>
+                            <th style="text-align: center;">Qty</th>
+                            <th style="text-align: right;">Price</th>
+                            <th style="text-align: right;">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in order.items.all %}
+                        <tr>
+                            <td>{{ item.food_item.name }}</td>
+                            <td style="text-align: center;">{{ item.quantity }}</td>
+                            <td style="text-align: right;">KES {{ item.price_at_order }}</td>
+                            <td style="text-align: right; font-weight: bold; color: #ea580c;">KES {{ item.get_total_price }}</td>
+                        </tr>
+                        {% endfor %}
+                        <tr style="background: #f9fafb;">
+                            <td colspan="3" style="text-align: right; font-weight: bold;">Subtotal:</td>
+                            <td style="text-align: right; font-weight: bold; color: #ea580c;">KES {{ order.subtotal }}</td>
+                        </tr>
+                        <tr style="background: #f9fafb;">
+                            <td colspan="3" style="text-align: right;">Delivery Fee:</td>
+                            <td style="text-align: right;">KES {{ order.delivery_fee }}</td>
+                        </tr>
+                        <tr class="total-row">
+                            <td colspan="3" style="text-align: right;">TOTAL:</td>
+                            <td style="text-align: right;">KES {{ order.total }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div style="text-align: center; margin: 40px 0;">
+                    <a href="{{ site_url }}/admin-panel/orders/" class="modern-btn">📊 View All Orders →</a>
+                </div>
+
+                <div class="footer">
+                    <p>Tipsy Theoryy Admin System<br>Sent {{ now|date:"F d, Y at h:i A" }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

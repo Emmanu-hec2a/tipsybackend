@@ -1,0 +1,77 @@
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background-color: #f3f4f6; margin: 0; padding: 40px 20px; color: #1f2937; }
+        .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 24px; overflow: hidden; box-shadow: 0 4px 25px rgba(0,0,0,0.05); }
+        .header { background-color: #0d3b30; padding: 40px; text-align: center; color: #ffffff; }
+        .header h1 { margin: 0; font-size: 28px; font-weight: 800; }
+        .header p { margin: 8px 0 0 0; font-size: 14px; opacity: 0.8; font-weight: 500; }
+        .content { padding: 40px; }
+        .greeting { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
+        .message { line-height: 1.6; color: #4b5563; margin-bottom: 32px; }
+        .detail-section { background-color: #f9fafb; border-radius: 16px; padding: 24px; margin-bottom: 32px; }
+        .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+        .detail-row:last-child { border-bottom: none; }
+        .detail-label { color: #64748b; font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .detail-value { font-weight: 700; color: #0f172a; }
+        .cta-container { text-align: center; margin: 40px 0; }
+        .btn { display: inline-block; padding: 16px 36px; background-color: #0d3b30; color: #ffffff !important; text-decoration: none; border-radius: 100px; font-weight: 700; font-size: 16px; }
+        .footer { padding: 32px; text-align: center; border-top: 1px solid #f1f5f9; color: #94a3b8; font-size: 12px; }
+        .payment-box { background: #fef3c7; border: 1px solid #fbbf24; border-radius: 12px; padding: 20px; margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Order Confirmed!</h1>
+            <p>Thank you for choosing Tipsy Theoryy</p>
+        </div>
+        <div class="content">
+            <div class="greeting">Hi {{ order.user.get_full_name|default:order.user.username }},</div>
+            <p class="message">Your order #{{ order.order_number }} has been received and is now being prepared. We'll notify you as soon as it's out for delivery.</p>
+
+            {% if order.payment_method == 'cash' %}
+            <div class="payment-box">
+                <h3 style="color: #92400e; margin: 0 0 15px 0; font-size: 18px;">💳 Payment Required</h3>
+                <p style="margin: 10px 0;"><strong>Please complete payment using M-PESA {% if order.store_type == 'liquor' %}Paybill{% else %}Till Number{% endif %}:</strong></p>
+                <p style="margin: 5px 0; font-size: 1.2em; color: #2563eb; font-weight: bold;">
+                    {% if order.store_type == 'liquor' %}8330098 - NETWIX{% else %}6960814 - MOSES ONKUNDI ATINDA{% endif %}
+                </p>
+                {% if order.store_type == 'liquor' %}
+                <p style="margin: 5px 0;"><strong>Account Number:</strong> {{ order.order_number }}</p>
+                {% endif %}
+                <p style="margin: 5px 0;"><strong>Amount:</strong> <span style="color: #10b981; font-size: 1.3em; font-weight: bold;">KES {{ order.total }}</span></p>
+            </div>
+            {% endif %}
+
+            <div class="detail-section">
+                <div class="detail-row">
+                    <span class="detail-label">Address</span>
+                    <span class="detail-value">{{ order.address_string|default:"Pin Location" }}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Phone</span>
+                    <span class="detail-value">{{ order.phone_number }}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Total</span>
+                    <span class="detail-value" style="color: #0d3b30;">KES {{ order.total }}</span>
+                </div>
+            </div>
+
+            <div class="cta-container">
+                <a href="tipsytheoryy://order/{{ order.id }}" class="btn">Track Your Order →</a>
+            </div>
+
+            <p style="text-align: center; font-size: 12px; color: #94a3b8; margin-top: 40px;">
+                Questions? Reply to this email or call 0110345054
+            </p>
+        </div>
+        <div class="footer">
+            &copy; {{ now|date:"Y" }} Tipsy Theoryy. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>
