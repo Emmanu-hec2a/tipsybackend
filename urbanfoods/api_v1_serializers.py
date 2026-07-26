@@ -492,7 +492,7 @@ class OrderSerializer(serializers.ModelSerializer):
             'store_name', 'store_latitude', 'store_longitude',
             'rider_latitude', 'rider_longitude', 'rider_phone', 'rider_rating',
             'requires_rider_verification', 'rider_verified_at', 'rider_verification_method', 'verification_image_url',
-            'has_unread_messages'
+            'has_unread_messages', 'is_shiriki'
         ]
         read_only_fields = ['order_number', 'created_at']
 
