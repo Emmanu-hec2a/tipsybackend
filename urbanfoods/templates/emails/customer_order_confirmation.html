@@ -34,7 +34,7 @@
 
             {% if order.payment_method == 'cash' %}
             <div class="payment-box">
-                <h3 style="color: #92400e; margin: 0 0 15px 0; font-size: 18px;">💳 Payment Required</h3>
+                <h3 style="color: #92400e; margin: 0 0 15px 0; font-size: 18px;">Payment Required</h3>
                 <p style="margin: 10px 0;"><strong>Please complete payment using M-PESA {% if order.store_type == 'liquor' %}Paybill{% else %}Till Number{% endif %}:</strong></p>
                 <p style="margin: 5px 0; font-size: 1.2em; color: #2563eb; font-weight: bold;">
                     {% if order.store_type == 'liquor' %}8330098 - NETWIX{% else %}6960814 - MOSES ONKUNDI ATINDA{% endif %}
