@@ -5,7 +5,8 @@ import datetime
 from .models import (
     User, Store, Order, OrderItem, FoodItem, Rating, RiderEarning, 
     FoodCategory, Promotion, SubscriptionPayment, SavedAddress, 
-    RiderLocationPing, ChatMessage, ShirikiSession, ShirikiContribution
+    RiderLocationPing, ChatMessage, ShirikiSession, ShirikiContribution,
+    RiderWeeklyStat, PanicAlert
 )
 from django.db.models import Sum
 
@@ -694,3 +695,17 @@ class ShirikiSessionSerializer(serializers.ModelSerializer):
 
     def get_amount_collected(self, obj):
         return obj.contributions.filter(status='confirmed').aggregate(Sum('amount'))['amount__sum'] or 0
+
+class RiderWeeklyStatSerializer(serializers.ModelSerializer):
+    rider_name = serializers.ReadOnlyField(source='rider.get_full_name')
+    store_name = serializers.ReadOnlyField(source='store.name')
+    
+    class Meta:
+        model = RiderWeeklyStat
+        fields = '__all__'
+
+class PanicAlertSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PanicAlert
+        fields = '__all__'
+        read_only_fields = ['rider', 'timestamp', 'is_resolved', 'resolved_at']

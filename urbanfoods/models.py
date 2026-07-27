@@ -806,3 +806,40 @@ class ShirikiContribution(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.amount} for {self.session.invite_code}"
+
+class RiderWeeklyStat(models.Model):
+    STATUS_CHOICES = [
+        ('unpaid', 'Unpaid'),
+        ('paid', 'Paid'),
+        ('disputed', 'Disputed'),
+    ]
+    rider = models.ForeignKey(User, on_delete=models.CASCADE, related_name='weekly_stats')
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='rider_weekly_stats')
+    week_start = models.DateField()
+    week_end = models.DateField()
+    total_base_fare = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    total_tips = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='unpaid')
+    mpesa_code = models.CharField(max_length=20, blank=True, null=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['rider', 'store', 'week_start']
+        ordering = ['-week_start']
+
+    def __str__(self):
+        return f"{self.rider.username} - {self.store.name} - Week {self.week_start}"
+
+class PanicAlert(models.Model):
+    rider = models.ForeignKey(User, on_delete=models.CASCADE, related_name='panic_alerts')
+    latitude = models.DecimalField(max_digits=12, decimal_places=9)
+    longitude = models.DecimalField(max_digits=12, decimal_places=9)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    is_resolved = models.BooleanField(default=False)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+
+    def __str__(self):
+        return f"PANIC: {self.rider.username} at {self.timestamp}"

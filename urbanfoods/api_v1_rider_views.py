@@ -9,11 +9,15 @@ from django.core.cache import cache
 import json
 import logging
 from decimal import Decimal, InvalidOperation
+from django.shortcuts import get_object_or_404
 
 logger = logging.getLogger(__name__)
 
-from .models import Order, RiderEarning, RiderLocationPing, User
-from .api_v1_serializers import OrderSerializer, RiderEarningSerializer, RiderProfileSerializer
+from .models import Order, RiderEarning, RiderLocationPing, User, RiderWeeklyStat, PanicAlert
+from .api_v1_serializers import (
+    OrderSerializer, RiderEarningSerializer, RiderProfileSerializer,
+    RiderWeeklyStatSerializer, PanicAlertSerializer
+)
 from .permissions import IsRider
 
 VALID_TRANSITIONS = {
@@ -358,3 +362,69 @@ class RiderAcceptOrderView(APIView):
             order.save(update_fields=['assigned_rider', 'status'])
         
         return Response({'status': 'accepted', 'order': OrderSerializer(order).data})
+
+class RiderPayoutHistoryView(APIView):
+    permission_classes = [IsRider]
+    
+    def get(self, request):
+        stats = RiderWeeklyStat.objects.filter(rider=request.user).order_by('-week_start')
+        return Response(RiderWeeklyStatSerializer(stats, many=True).data)
+
+class RiderPayoutDisputeView(APIView):
+    permission_classes = [IsRider]
+    
+    def post(self, request, pk):
+        stat = get_object_or_404(RiderWeeklyStat, pk=pk, rider=request.user)
+        
+        reason = request.data.get('reason', 'Payment not received')
+        stat.status = 'disputed'
+        stat.save()
+        
+        # 🔔 Notify SuperAdmin via Telegram
+        from .utils import send_telegram_message
+        msg = (
+            f"🚩 <b>PAYOUT DISPUTE RAISED</b>\n\n"
+            f"Rider: {request.user.username}\n"
+            f"Store: {stat.store.name}\n"
+            f"Amount: KSh {stat.total_amount}\n"
+            f"Week: {stat.week_start}\n"
+            f"Reason: {reason}"
+        )
+        send_telegram_message(msg, bot_type='admin')
+        
+        return Response({'status': 'disputed', 'message': 'Dispute raised successfully'})
+
+class RiderPanicAlertView(APIView):
+    permission_classes = [IsRider]
+    
+    def post(self, request):
+        lat = request.data.get('latitude')
+        lng = request.data.get('longitude')
+        
+        if not lat or not lng:
+            return Response({'error': 'Coordinates required'}, status=400)
+            
+        panic = PanicAlert.objects.create(
+            rider=request.user,
+            latitude=lat,
+            longitude=lng
+        )
+        
+        # 🚨 TRIGGER EMERGENCY ALERTS
+        from .utils import send_telegram_message, send_telegram_notification
+        
+        # 1. Notify SuperAdmin
+        admin_msg = (
+            f"🚨 <b>EMERGENCY: RIDER PANIC ALERT</b>\n\n"
+            f"Rider: {request.user.get_full_name() or request.user.username}\n"
+            f"Phone: {request.user.phone}\n"
+            f"Location: https://www.google.com/maps?q={lat},{lng}\n"
+            f"Time: {timezone.now().strftime('%I:%M %p')}"
+        )
+        send_telegram_message(admin_msg, bot_type='admin')
+        
+        # 2. Notify Store Owner (if linked)
+        if request.user.assigned_store and request.user.assigned_store.telegram_chat_id:
+            send_telegram_notification(request.user.assigned_store.telegram_chat_id, admin_msg)
+            
+        return Response({'status': 'alert_sent', 'panic_id': panic.id})

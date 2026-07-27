@@ -8,12 +8,14 @@ from django.db.models import Sum, Count, Q, F
 from django.db.models.functions import TruncDate
 from .models import (
     Order, FoodItem, User, Store, OrderItem, FoodCategory, 
-    Promotion, SubscriptionPayment, MarketingBlast, WeeklyRevenueStat, PartnerPayout
+    Promotion, SubscriptionPayment, MarketingBlast, WeeklyRevenueStat, PartnerPayout,
+    RiderWeeklyStat
 )
 from .api_v1_serializers import (
     OrderSerializer, FoodItemSerializer, UserSerializer, 
     StoreSerializer, FoodCategorySerializer, PromotionSerializer,
-    SubscriptionPaymentSerializer, OrderItemSerializer
+    SubscriptionPaymentSerializer, OrderItemSerializer,
+    RiderWeeklyStatSerializer
 )
 from .permissions import IsPartner, QueryParamJWTAuthentication
 from .utils import haversine_distance_km
@@ -842,3 +844,38 @@ class VerifyRevenueGateView(PartnerBaseView, APIView):
         if password == "TipsyPartner2026":
             return Response({'success': True})
         return Response({'success': False}, status=401)
+
+class RiderSettlementListView(PartnerBaseView, APIView):
+    def get(self, request):
+        store = self.get_store(request)
+        if not store:
+            return Response({'error': 'Store context required'}, status=400)
+            
+        # Get all stats for riders linked to this store
+        stats = RiderWeeklyStat.objects.filter(store=store).order_by('-week_start')
+        return Response(RiderWeeklyStatSerializer(stats, many=True).data)
+
+class SettleRiderWeekView(PartnerBaseView, APIView):
+    def post(self, request, pk):
+        store = self.get_store(request)
+        stat = get_object_or_404(RiderWeeklyStat, pk=pk, store=store)
+        
+        mpesa_code = request.data.get('mpesa_code')
+        if not mpesa_code:
+            return Response({'error': 'M-Pesa reference code is required'}, status=400)
+            
+        stat.status = 'paid'
+        stat.mpesa_code = mpesa_code.upper()
+        stat.paid_at = timezone.now()
+        stat.save()
+        
+        # 🔔 Notify Rider via FCM
+        from .tasks import send_lifecycle_notification_task
+        send_lifecycle_notification_task.delay(
+            stat.rider.id,
+            "Weekly Payout Received! 💰",
+            f"Your payout of KSh {stat.total_amount} has been confirmed. Code: {stat.mpesa_code}",
+            {'type': 'rider_payout', 'stat_id': str(stat.id)}
+        )
+        
+        return Response({'status': 'success', 'message': 'Settlement recorded successfully'})

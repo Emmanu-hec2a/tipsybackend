@@ -1,6 +1,9 @@
 from celery import shared_task
 from .utils import send_fcm_notification, send_telegram_notification, send_telegram_message
-from .models import User, MarketingBlast, Store, Cart, ShirikiSession, ShirikiContribution
+from .models import (
+    User, MarketingBlast, Store, Cart, ShirikiSession, 
+    ShirikiContribution, RiderEarning, RiderWeeklyStat
+)
 from django.utils import timezone
 from django.db import transaction
 from datetime import timedelta
@@ -217,3 +220,70 @@ def check_expired_shiriki_sessions():
             logger.error(f"Failed to process expiry for Shiriki Session {session.invite_code}: {e}")
 
     return f"Processed {count} expired Shiriki sessions"
+
+@shared_task
+def calculate_rider_weekly_stats():
+    """
+    Automated Weekly Payout Calculation.
+    Runs every Sunday at 23:59.
+    Aggregates all RiderEarning for the current week and groups them by Rider and Store.
+    """
+    from django.db.models import Sum
+    from datetime import date, timedelta
+    
+    today = timezone.localdate()
+    # Week start: last Monday
+    week_start = today - timedelta(days=today.weekday())
+    # Week end: today (Sunday)
+    week_end = today
+    
+    # Get all earnings for this week
+    earnings = RiderEarning.objects.filter(
+        created_at__date__gte=week_start,
+        created_at__date__lte=week_end
+    ).select_related('rider', 'order__store')
+    
+    # Group by (rider, store)
+    # Note: In a large system, use .values('rider', 'order__store').annotate(...)
+    # For Tipsy V1, we iterate for clarity and precision
+    rider_store_map = {}
+    
+    for earn in earnings:
+        key = (earn.rider.id, earn.order.store.id)
+        if key not in rider_store_map:
+            rider_store_map[key] = {
+                'base': 0,
+                'tips': 0,
+                'rider': earn.rider,
+                'store': earn.order.store
+            }
+        
+        rider_store_map[key]['base'] += earn.base_fare
+        rider_store_map[key]['tips'] += earn.tip
+        
+    count = 0
+    for key, data in rider_store_map.items():
+        total = data['base'] + data['tips']
+        if total > 0:
+            stat, created = RiderWeeklyStat.objects.get_or_create(
+                rider=data['rider'],
+                store=data['store'],
+                week_start=week_start,
+                defaults={
+                    'week_end': week_end,
+                    'total_base_fare': data['base'],
+                    'total_tips': data['tips'],
+                    'total_amount': total,
+                    'status': 'unpaid'
+                }
+            )
+            if not created:
+                # Update if already exists (safe for re-runs)
+                stat.total_base_fare = data['base']
+                stat.total_tips = data['tips']
+                stat.total_amount = total
+                stat.save()
+            count += 1
+            
+    logger.info(f"Generated {count} RiderWeeklyStat records for week {week_start}")
+    return f"Generated {count} stats"

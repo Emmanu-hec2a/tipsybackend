@@ -37,6 +37,8 @@ partner_patterns = [
     path('billing/status/', api_v1_billing_views.SubscriptionPaymentStatusView.as_view(), name='partner_billing_status'),
     path('payments/mpesa/initiate/', api_v1_billing_views.PayNowView.as_view(), name='partner_payments_mpesa_initiate'),
     path('billing/history/', api_v1_billing_views.SubscriptionHistoryView.as_view(), name='partner_billing_history'),
+    path('rider-settlements/', api_v1_partner_views.RiderSettlementListView.as_view(), name='partner_rider_settlements'),
+    path('rider-settlements/<int:pk>/settle/', api_v1_partner_views.SettleRiderWeekView.as_view(), name='partner_rider_settle'),
 ]
 
 customer_patterns = [
@@ -87,6 +89,9 @@ rider_patterns = [
     path('earnings/', api_v1_rider_views.RiderEarningsView.as_view(), name='rider_earnings'),
     path('earnings/summary/', api_v1_rider_views.RiderEarningsSummaryView.as_view(), name='rider_earnings_summary'),
     path('profile/', api_v1_rider_views.RiderProfileView.as_view(), name='rider_profile'),
+    path('payouts/history/', api_v1_rider_views.RiderPayoutHistoryView.as_view(), name='rider_payout_history'),
+    path('payouts/<int:pk>/dispute/', api_v1_rider_views.RiderPayoutDisputeView.as_view(), name='rider_payout_dispute'),
+    path('panic/', api_v1_rider_views.RiderPanicAlertView.as_view(), name='rider_panic_alert'),
 ]
 
 superadmin_patterns = [
