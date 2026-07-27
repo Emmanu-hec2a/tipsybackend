@@ -428,3 +428,27 @@ class RiderPanicAlertView(APIView):
             send_telegram_notification(request.user.assigned_store.telegram_chat_id, admin_msg)
             
         return Response({'status': 'alert_sent', 'panic_id': panic.id})
+
+class RiderReportIssueView(APIView):
+    permission_classes = [IsRider]
+    
+    def post(self, request):
+        issue_type = request.data.get('type', 'General')
+        message = request.data.get('message')
+        
+        if not message:
+            return Response({'error': 'Message content is required'}, status=400)
+            
+        # 🔔 Notify SuperAdmin via Telegram
+        from .utils import send_telegram_message
+        report_msg = (
+            f"⚠️ <b>RIDER ISSUE REPORT</b>\n\n"
+            f"Rider: {request.user.get_full_name() or request.user.username}\n"
+            f"Phone: {request.user.phone}\n"
+            f"Type: {issue_type}\n"
+            f"Report: {message}\n"
+            f"Time: {timezone.now().strftime('%I:%M %p, %d %b %Y')}"
+        )
+        send_telegram_message(report_msg, bot_type='admin')
+        
+        return Response({'status': 'success', 'message': 'Issue reported successfully'})

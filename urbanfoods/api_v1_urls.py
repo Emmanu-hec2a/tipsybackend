@@ -92,6 +92,7 @@ rider_patterns = [
     path('payouts/history/', api_v1_rider_views.RiderPayoutHistoryView.as_view(), name='rider_payout_history'),
     path('payouts/<int:pk>/dispute/', api_v1_rider_views.RiderPayoutDisputeView.as_view(), name='rider_payout_dispute'),
     path('panic/', api_v1_rider_views.RiderPanicAlertView.as_view(), name='rider_panic_alert'),
+    path('report-issue/', api_v1_rider_views.RiderReportIssueView.as_view(), name='rider_report_issue'),
 ]
 
 superadmin_patterns = [
