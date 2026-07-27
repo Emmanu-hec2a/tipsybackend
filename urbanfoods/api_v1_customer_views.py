@@ -417,8 +417,12 @@ class CustomerRetryPaymentView(APIView):
         from .mpesa_utils import MpesaIntegration
         mpesa = MpesaIntegration(store=order.store)
         try:
-            # Use provided phone or fallback to order's existing phone
-            raw_phone = request.data.get('mpesa_phone') or order.phone_number
+            # Use provided phone or fallback to order's existing phone or user's phone
+            raw_phone = request.data.get('mpesa_phone') or order.phone_number or request.user.phone
+            
+            if not raw_phone:
+                return Response({'error': 'No phone number found. Please provide an M-Pesa phone number.'}, status=status.HTTP_400_BAD_REQUEST)
+                
             phone = mpesa.format_phone_number(raw_phone)
             
             # Update order phone if a new one was provided for this retry
@@ -445,9 +449,12 @@ class CustomerRetryPaymentView(APIView):
                     'message': 'M-Pesa STK push initiated successfully.'
                 })
             else:
-                return Response({'error': stk_result.get('message')}, status=status.HTTP_502_BAD_GATEWAY)
+                return Response({'error': stk_result.get('message')}, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError as ve:
+            return Response({'error': str(ve)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception(f"Retry Payment failed for Order {order.order_number}")
+            return Response({'error': 'An unexpected error occurred while initiating payment.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class CustomerRateOrderView(APIView):
     permission_classes = [IsCustomer]
