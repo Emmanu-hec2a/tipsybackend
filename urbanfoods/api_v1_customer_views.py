@@ -100,6 +100,9 @@ class CustomerStoreListView(generics.ListAPIView):
         else:
             queryset = queryset.annotate(is_favourite=Value(False, output_field=BooleanField()))
 
+        # 🛡️ Hardening: Default distance to 0.0 to prevent nulls in serializer when coordinates are missing
+        queryset = queryset.annotate(distance=Value(0.0, output_field=FloatField()))
+
         queryset = queryset.order_by('-is_pro', 'name')
         
         # Get coordinates from query params
@@ -115,10 +118,10 @@ class CustomerStoreListView(generics.ListAPIView):
                 u_lat = float(lat)
                 u_lng = float(lng)
                 
-                # 🛡️ Scalability Guard: Bounding Box Filter (Approx 30km x 30km)
+                # 🛡️ Scalability Guard: Bounding Box Filter (Approx 165km x 165km)
                 # We filter by a square first to use DB indexes before doing the heavy Sqrt math
-                lat_deg = 0.3 
-                lng_deg = 0.3
+                lat_deg = 1.5 
+                lng_deg = 1.5
                 queryset = queryset.filter(
                     latitude__range=(u_lat - lat_deg, u_lat + lat_deg),
                     longitude__range=(u_lng - lng_deg, u_lng + lng_deg)
@@ -183,7 +186,9 @@ class CustomerFavouriteStoresListView(generics.ListAPIView):
     permission_classes = [IsCustomer]
 
     def get_queryset(self):
-        return self.request.user.favourite_stores.filter(is_active=True)
+        return self.request.user.favourite_stores.filter(is_active=True).annotate(
+            distance=Value(0.0, output_field=FloatField())
+        )
 
 class CustomerRedeemPointsView(APIView):
     permission_classes = [IsCustomer]
