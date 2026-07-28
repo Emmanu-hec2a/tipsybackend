@@ -12,6 +12,7 @@ from .models import (
     OrderStatusHistory, FoodCategory, Promotion, ChatMessage,
     ShirikiSession, ShirikiContribution, User
 )
+from .tasks import trigger_stk_push_task
 from .api_v1_serializers import (
     StoreSerializer, FoodItemSerializer, OrderSerializer, 
     UserSerializer, SavedAddressSerializer, FoodCategorySerializer, 
@@ -115,8 +116,16 @@ class CustomerStoreListView(generics.ListAPIView):
                 u_lat = float(lat)
                 u_lng = float(lng)
                 
-                # Annotate distance
-                # We still keep -is_pro as the primary sort, then distance
+                # 🛡️ Scalability Guard: Bounding Box Filter (Approx 30km x 30km)
+                # We filter by a square first to use DB indexes before doing the heavy Sqrt math
+                lat_deg = 0.3 
+                lng_deg = 0.3
+                queryset = queryset.filter(
+                    latitude__range=(u_lat - lat_deg, u_lat + lat_deg),
+                    longitude__range=(u_lng - lng_deg, u_lng + lng_deg)
+                )
+
+                # Annotate distance for sorting only on the filtered small subset
                 queryset = queryset.annotate(
                     distance=ExpressionWrapper(
                         Sqrt(Power(F('latitude') - u_lat, 2) + Power(F('longitude') - u_lng, 2)) * 111,
@@ -441,15 +450,13 @@ class CustomerRetryPaymentView(APIView):
                 transaction_desc=f"Retry Payment {order.order_number}"
             )
             
-            if stk_result.get('success'):
-                order.mpesa_checkout_request_id = stk_result.get('checkout_request_id')
-                order.save(update_fields=['mpesa_checkout_request_id'])
-                return Response({
-                    'checkout_request_id': stk_result.get('checkout_request_id'),
-                    'message': 'M-Pesa STK push initiated successfully.'
-                })
-            else:
-                return Response({'error': stk_result.get('message')}, status=status.HTTP_400_BAD_REQUEST)
+            # --- ASYNC RETRY Logic ---
+            trigger_stk_push_task.delay(order.id, phone)
+            
+            return Response({
+                'message': 'Retry payment initiated. Please check your phone for the M-Pesa prompt.',
+                'is_async': True
+            })
         except ValueError as ve:
             return Response({'error': str(ve)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -756,49 +763,22 @@ class CustomerPlaceOrderView(APIView):
 
             is_shiriki = data.get('is_shiriki', False)
 
-            # --- OUTSIDE TRANSACTION ---
-            # Trigger M-Pesa STK Push if method is mpesa and there is a balance, AND not a Shiriki session
+            # --- ASYNC CHECKOUT Logic (High-Concurrency Ready) ---
             if order.payment_method == 'mpesa' and order.total > 0 and not is_shiriki:
-                logger.info(f"Triggering STK Push for Order {order.order_number} (ID: {order.id})")
-                try:
-                    mpesa = MpesaIntegration(store=order.store)
-                    
-                    # Use provided mpesa_phone or fallback to user.phone
-                    raw_phone = data.get('mpesa_phone') or request.user.phone
-                    phone = mpesa.format_phone_number(raw_phone)
-                    
-                    # Update order with the phone used for payment
-                    order.phone_number = phone 
-                    order.save(update_fields=['phone_number'])
-                    
-                    # 🛡️ Fail-Closed Production Guard
-                    is_production = str(os.environ.get('MPESA_PRODUCTION', 'false')).lower() == 'true'
-                    amount = int(order.total) if is_production else 1
-                    
-                    logger.info(f"Initiating STK: Phone={phone}, Amount={amount}, Store={order.store.name}")
-                    
-                    stk_result = mpesa.initiate_stk_push(
-                        phone_number=phone,
-                        amount=amount,
-                        account_reference=f"ORD-{order.order_number}",
-                        transaction_desc=f"Payment for Order {order.order_number}"
-                    )
-                    
-                    if stk_result.get('success'):
-                        order.mpesa_checkout_request_id = stk_result.get('checkout_request_id')
-                        order.save(update_fields=['mpesa_checkout_request_id'])
-                        response_data['checkout_request_id'] = stk_result.get('checkout_request_id')
-                        response_data['message'] = "M-Pesa STK push initiated successfully."
-                        logger.info(f"STK Push Success: {order.mpesa_checkout_request_id}")
-                    else:
-                        # 🛡️ Critical: Initiation Failed.
-                        # Do not rollback order, but ensure user knows they must retry
-                        error_msg = stk_result.get('message', 'M-Pesa service unavailable')
-                        response_data['mpesa_error'] = error_msg
-                        logger.error(f"STK Push Failed: {error_msg}")
-                except Exception as mpesa_err:
-                    response_data['mpesa_error'] = str(mpesa_err)
-                    logger.exception(f"STK Push Exception for Order {order.order_number}")
+                logger.info(f"Queuing STK Push Task for Order {order.order_number}")
+                
+                raw_phone = data.get('mpesa_phone') or request.user.phone
+                
+                # Update order with the phone used (for tracking)
+                # Note: tasks will re-format it
+                order.phone_number = raw_phone 
+                order.save(update_fields=['phone_number'])
+                
+                # Offload to Celery Queue (Fire and Forget)
+                trigger_stk_push_task.delay(order.id, raw_phone)
+                
+                response_data['message'] = "Payment processing started. Please look out for the M-Pesa prompt."
+                response_data['is_async'] = True
 
             return Response(response_data, status=status.HTTP_201_CREATED)
 
@@ -878,33 +858,26 @@ class ShirikiContributeView(APIView):
             return Response({'error': f'Amount exceeds remaining balance of {remaining}'}, status=400)
             
         # Initiate STK Push
-        mpesa = MpesaIntegration(store=session.order.store)
-        formatted_phone = mpesa.format_phone_number(phone)
-        
-        # 🛡️ Fail-Closed Production Guard
-        is_production = str(os.environ.get('MPESA_PRODUCTION', 'false')).lower() == 'true'
-        stk_amount = int(amount) if is_production else 1
+        # Create contribution record FIRST
+        contribution = ShirikiContribution.objects.create(
+            session=session,
+            user=request.user,
+            amount=amount,
+            phone_number=phone,
+            status='pending'
+        )
 
-        response = mpesa.initiate_stk_push(
-            phone_number=formatted_phone,
-            amount=stk_amount,
-            account_reference=session.order.order_number,
-            transaction_desc=f"Shiriki {session.invite_code}"
+        # --- ASYNC Shiriki Logic (High Concurrency Ready) ---
+        from .tasks import trigger_stk_push_task
+        trigger_stk_push_task.delay(
+            order_id=session.order.id, 
+            mpesa_phone=phone,
+            contribution_id=contribution.id
         )
         
-        if response.get('success'):
-            contribution = ShirikiContribution.objects.create(
-                session=session,
-                user=request.user,
-                amount=amount,
-                phone_number=phone,
-                checkout_request_id=response.get('checkout_request_id'),
-                status='pending'
-            )
-            return Response({
-                'success': True,
-                'checkout_request_id': contribution.checkout_request_id,
-                'message': 'STK Push initiated'
-            })
-        else:
-            return Response({'error': 'Failed to initiate payment'}, status=500)
+        return Response({
+            'success': True,
+            'contribution_id': contribution.id,
+            'message': f'Contribution of KSh {amount} initiated. Please enter your PIN.',
+            'is_async': True
+        })

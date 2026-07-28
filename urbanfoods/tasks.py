@@ -2,10 +2,13 @@ from celery import shared_task
 from .utils import send_fcm_notification, send_telegram_notification, send_telegram_message
 from .models import (
     User, MarketingBlast, Store, Cart, ShirikiSession, 
-    ShirikiContribution, RiderEarning, RiderWeeklyStat
+    ShirikiContribution, RiderEarning, RiderWeeklyStat, Order
 )
+from .mpesa_utils import MpesaIntegration
+import os
 from django.utils import timezone
 from django.db import transaction
+from django.db.models import Sum
 from datetime import timedelta
 import logging
 
@@ -287,3 +290,128 @@ def calculate_rider_weekly_stats():
             
     logger.info(f"Generated {count} RiderWeeklyStat records for week {week_start}")
     return f"Generated {count} stats"
+
+@shared_task(rate_limit='50/s', bind=True, max_retries=3)
+def trigger_stk_push_task(self, order_id, mpesa_phone, contribution_id=None):
+    """
+    Asynchronous task to trigger M-Pesa STK Push.
+    Rate limited to 50/s to comply with Safaricom TPS limits.
+    Handles both direct orders and Shiriki contributions.
+    """
+    try:
+        from .models import ShirikiContribution, Order
+        
+        # Determine target and context
+        contribution = None
+        if contribution_id:
+            contribution = ShirikiContribution.objects.select_related('session__order', 'user').get(id=contribution_id)
+            order = contribution.session.order
+            amount_to_charge = contribution.amount
+            account_ref = f"POT-{contribution.session.invite_code}"
+            desc = f"Shiriki Contribution {contribution.session.invite_code}"
+        else:
+            # Direct Order path
+            order = Order.objects.select_related('store', 'user').get(id=order_id)
+            if order.payment_status == 'paid':
+                return "Already Paid"
+            amount_to_charge = order.total
+            account_ref = f"ORD-{order.order_number}"
+            desc = f"Order {order.order_number} Payment"
+
+        mpesa = MpesaIntegration(store=order.store)
+        phone = mpesa.format_phone_number(mpesa_phone)
+        
+        # 🛡️ Fail-Closed Production Guard
+        is_production = str(os.environ.get('MPESA_PRODUCTION', 'false')).lower() == 'true'
+        stk_amount = int(amount_to_charge) if is_production else 1
+        
+        logger.info(f"Task: Initiating STK for {account_ref} to {phone}")
+        
+        stk_result = mpesa.initiate_stk_push(
+            phone_number=phone,
+            amount=stk_amount,
+            account_reference=account_ref,
+            transaction_desc=desc
+        )
+        
+        if stk_result.get('success'):
+            checkout_id = stk_result.get('checkout_request_id')
+            if contribution:
+                contribution.checkout_request_id = checkout_id
+                contribution.save(update_fields=['checkout_request_id'])
+            else:
+                order.mpesa_checkout_request_id = checkout_id
+                order.save(update_fields=['mpesa_checkout_request_id'])
+            
+            # Notify user via Silent FCM that STK is coming
+            target_user_id = contribution.user.id if contribution else order.user.id
+            send_lifecycle_notification_task.delay(
+                target_user_id,
+                "Payment Processing",
+                "Please check your phone for the M-Pesa PIN prompt.",
+                {
+                    'type': 'stk_initiated', 
+                    'order_id': str(order.id),
+                    'is_shiriki': 'true' if contribution else 'false'
+                }
+            )
+            return f"Success: {checkout_id}"
+        else:
+            error_msg = stk_result.get('message', 'M-Pesa service unavailable')
+            logger.error(f"STK Task Failed: {error_msg}")
+            if stk_result.get('retryable', False):
+                raise self.retry(countdown=5)
+            return f"Failed: {error_msg}"
+            
+    except (Order.DoesNotExist, ShirikiContribution.DoesNotExist):
+        logger.error(f"STK Task Error: Target record not found")
+    except Exception as e:
+        logger.exception(f"STK Task Exception")
+        raise self.retry(exc=e, countdown=10)
+
+@shared_task
+def notify_shiriki_progress_task(session_id, contributor_id, amount):
+    """
+    Broadcasts pot progress to ALL participants in a Shiriki Session.
+    Ensures real-time synchronization of progress bars.
+    """
+    try:
+        from .models import ShirikiSession, ShirikiContribution
+        session = ShirikiSession.objects.select_related('order', 'host').get(id=session_id)
+        contributor = User.objects.get(id=contributor_id)
+        
+        # Get all participants (Host + confirmed contributors)
+        participant_ids = list(ShirikiContribution.objects.filter(
+            session=session, 
+            status='confirmed'
+        ).values_list('user_id', flat=True))
+        participant_ids.append(session.host.id)
+        unique_participants = list(set(participant_ids))
+        
+        # Calculate current total for the update
+        current_total = float(ShirikiContribution.objects.filter(
+            session=session, 
+            status='confirmed'
+        ).aggregate(Sum('amount'))['amount__sum'] or 0)
+        
+        title = "Pot Filling Up! 🥂"
+        body = f"{contributor.first_name or contributor.username} added KSh {amount} to the pot."
+        
+        for user_id in unique_participants:
+            # Don't notify the person who just paid (their app already knows)
+            if user_id == contributor_id: continue
+            
+            send_lifecycle_notification_task.delay(
+                user_id,
+                title,
+                body,
+                {
+                    'type': 'shiriki_progress',
+                    'session_id': str(session.id),
+                    'current_amount': str(current_total),
+                    'target_amount': str(session.order.total)
+                }
+            )
+            
+    except Exception as e:
+        logger.error(f"Error in notify_shiriki_progress_task: {e}")

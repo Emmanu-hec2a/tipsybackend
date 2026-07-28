@@ -78,7 +78,7 @@ class DashboardStatsView(PartnerBaseView, APIView):
             
         # 🛡️ Redis Server-Side Caching (5 Minutes)
         from django.core.cache import cache
-        cache_key = f"dashboard_stats_{store.id}"
+        cache_key = f"dashboard_stats_s{store.id}_u{request.user.id}"
         cached_data = cache.get(cache_key)
         if cached_data:
             return Response(cached_data)
@@ -401,6 +401,13 @@ class AnalyticsSummaryView(PartnerBaseView, APIView):
                 'completed_orders': 0, 'pending_orders': 0, 'cancelled_orders': 0
             }, status=status.HTTP_403_FORBIDDEN)
             
+        # 🛡️ Redis Server-Side Caching (1 Hour)
+        from django.core.cache import cache
+        cache_key = f"analytics_summary_s{store.id}_u{request.user.id}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return Response(cached_data)
+
         total_revenue = Order.objects.filter(store=store, payment_status='paid').aggregate(Sum('total'))['total__sum'] or 0
         total_orders = Order.objects.filter(store=store).count()
         
@@ -421,7 +428,7 @@ class AnalyticsSummaryView(PartnerBaseView, APIView):
         returning_percent = round((returning_customers / total_customers * 100), 1) if total_customers > 0 else 0
         new_percent = 100 - returning_percent if total_customers > 0 else 0
 
-        return Response({
+        res_data = {
             'total_revenue': float(total_revenue),
             'total_orders': total_orders,
             'completed_orders': completed_orders,
@@ -432,7 +439,11 @@ class AnalyticsSummaryView(PartnerBaseView, APIView):
                 'returning_percent': returning_percent,
                 'total_customers': total_customers
             }
-        })
+        }
+        
+        # Save to Redis for 1 hour
+        cache.set(cache_key, res_data, 3600)
+        return Response(res_data)
 
 class RevenueAnalyticsView(PartnerBaseView, APIView):
     def get(self, request):
@@ -539,6 +550,12 @@ class SwitchActiveStoreView(PartnerBaseView, APIView):
         try:
             # Security: Ensure the user actually owns this store
             store = Store.objects.get(id=store_id, owner=request.user)
+            
+            # 🛡️ Cache Invalidation: Clear dashboard & analytics cache when switching stores
+            from django.core.cache import cache
+            cache.delete(f"dashboard_stats_s{store.id}_u{request.user.id}")
+            cache.delete(f"analytics_summary_s{store.id}_u{request.user.id}")
+
             return Response({
                 'success': True,
                 'store': StoreSerializer(store, context={'request': request}).data

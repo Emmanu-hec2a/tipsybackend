@@ -1061,6 +1061,12 @@ def mpesa_callback(request):
         # ── Shiriki Contribution Logic ──
         if contribution:
             with transaction.atomic():
+                # 🛡️ High-Concurrency Guard: Lock the session record for final completion check
+                session = ShirikiSession.objects.select_for_update().get(id=contribution.session.id)
+                
+                if contribution.status == 'confirmed':
+                    return HttpResponse("OK")
+
                 contribution.status = 'confirmed'
                 contribution.paid_at = timezone.now()
                 contribution.save()
@@ -1069,17 +1075,16 @@ def mpesa_callback(request):
                 contribution.user.loyalty_points = F('loyalty_points') + int(contribution.amount)
                 contribution.user.save(update_fields=['loyalty_points'])
 
-                # 🚀 CUSTOM NOTIFICATION: Notify Host of contribution
-                try:
-                    from .utils import notify_shiriki_contribution
-                    notify_shiriki_contribution(contribution)
-                except Exception as e:
-                    logger.error(f"Failed to send Shiriki contribution notification: {e}")
-
-                # Check if session is completed
-                session = contribution.session
+                # 🚀 ATOMIC Pot Check: Safely aggregate confirmed payments
                 total_paid = session.contributions.filter(status='confirmed').aggregate(Sum('amount'))['amount__sum'] or 0
                 
+                # Notify ALL participants of the progress (Real-time Sync)
+                try:
+                    from .utils import notify_shiriki_progress_task
+                    notify_shiriki_progress_task.delay(session.id, contribution.user.id, float(contribution.amount))
+                except Exception as e:
+                    logger.error(f"Failed to queue Shiriki progress notification: {e}")
+
                 if total_paid >= (session.order.total - Decimal('0.01')): # Buffer for rounding
                     session.status = 'completed'
                     session.save()
