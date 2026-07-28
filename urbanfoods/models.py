@@ -479,7 +479,8 @@ class Order(models.Model):
             old_status = Order.objects.get(pk=self.pk).status
 
         if not self.order_number:
-            self.order_number = f"TT{timezone.now().strftime('%Y%m%d')}{uuid.uuid4().hex[:6].upper()}"
+            # 🛡️ Use local Nairobi time for order numbering to ensure sequential dates in Kenya
+            self.order_number = f"TT{timezone.localtime(timezone.now()).strftime('%Y%m%d')}{uuid.uuid4().hex[:6].upper()}"
         super().save(*args, **kwargs)
 
         # Handle inventory deduction on delivery

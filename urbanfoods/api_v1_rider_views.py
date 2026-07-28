@@ -185,7 +185,7 @@ class RiderLocationPingView(APIView):
             current_path.append({
                 'lat': lat,
                 'lng': lng,
-                'timestamp': timezone.now().isoformat()
+                'timestamp': timezone.localtime(timezone.now()).isoformat()
             })
             cache.set(path_key, current_path, timeout=3600*4) # 4 hours TTL
 
@@ -424,7 +424,7 @@ class RiderPanicAlertView(APIView):
             f"Rider: {request.user.get_full_name() or request.user.username}\n"
             f"Phone: {request.user.phone}\n"
             f"Location: https://www.google.com/maps?q={lat},{lng}\n"
-            f"Time: {timezone.now().strftime('%I:%M %p')}"
+            f"Time: {timezone.localtime(timezone.now()).strftime('%I:%M %p')}"
         )
         send_telegram_message(admin_msg, bot_type='admin')
         
@@ -452,7 +452,7 @@ class RiderReportIssueView(APIView):
             f"Phone: {request.user.phone}\n"
             f"Type: {issue_type}\n"
             f"Report: {message}\n"
-            f"Time: {timezone.now().strftime('%I:%M %p, %d %b %Y')}"
+            f"Time: {timezone.localtime(timezone.now()).strftime('%I:%M %p, %d %b %Y')}"
         )
         send_telegram_message(report_msg, bot_type='admin')
         

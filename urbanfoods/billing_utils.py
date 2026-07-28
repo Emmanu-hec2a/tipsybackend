@@ -61,7 +61,9 @@ class SubscriptionBilling:
         if not access_token:
             return {'success': False, 'message': 'Access token error'}
 
-        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        # 🛡️ Safaricom expects a specific timestamp format in Nairobi time
+        from django.utils import timezone
+        timestamp = timezone.localtime(timezone.now()).strftime('%Y%m%d%H%M%S')
         data_to_encode = f"{self.shortcode}{self.passkey}{timestamp}"
         password = base64.b64encode(data_to_encode.encode()).decode()
 

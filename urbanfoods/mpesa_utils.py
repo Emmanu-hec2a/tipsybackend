@@ -137,7 +137,8 @@ class MpesaIntegration:
         if not access_token:
             return {'success': False, 'message': 'Authentication failed'}
 
-        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        # 🛡️ Safaricom expects a specific timestamp format in Nairobi time (EAT)
+        timestamp = timezone.localtime(timezone.now()).strftime('%Y%m%d%H%M%S')
         password = self.generate_password(timestamp)
 
         # Determine if it's Paybill or Till
@@ -205,7 +206,8 @@ class MpesaIntegration:
         if not access_token:
             return {'success': False, 'message': 'Authentication failed'}
 
-        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        # 🛡️ Safaricom expects a specific timestamp format in Nairobi time (EAT)
+        timestamp = timezone.localtime(timezone.now()).strftime('%Y%m%d%H%M%S')
         password = self.generate_password(timestamp)
 
         payload = {

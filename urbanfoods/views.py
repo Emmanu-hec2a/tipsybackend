@@ -418,7 +418,7 @@ def order_status_api(request, order_number):
         'success': True,
         'status': order.status,
         'status_display': order.get_status_display(),
-        'updated_at': order.updated_at.isoformat()
+        'updated_at': timezone.localtime(order.updated_at).isoformat()
     })
 
 # ==================== USER PROFILE ====================
@@ -658,7 +658,7 @@ def log_mpesa_event(event_type, user_id=None, order_number=None, phone=None, amo
         "order_number": order_number,
         "phone": f"+2547XXX{phone[-4:]}" if phone else None,
         "amount": float(amount) if amount else None,
-        "timestamp": timezone.now().isoformat(),
+        "timestamp": timezone.localtime(timezone.now()).isoformat(),
     }
     if extra:
         log_data.update(extra)

@@ -622,7 +622,7 @@ class OrderInvoiceView(PartnerBaseView, APIView):
                 'store': store,
                 'items': order.items.all(),
                 'logo_url': request.build_absolute_uri(store.logo.url) if store.logo else None,
-                'date': timezone.now().strftime('%d %b, %Y')
+                'date': timezone.localtime(timezone.now()).strftime('%d %b, %Y')
             }
             
             html = template.render(context)
