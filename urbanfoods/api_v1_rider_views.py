@@ -4,7 +4,7 @@ from rest_framework import status
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import Q, F, ExpressionWrapper, FloatField, Sum
+from django.db.models import Q, F, ExpressionWrapper, FloatField, Sum, Value
 from django.db.models.functions import Sqrt, Power
 from django.core.cache import cache
 import json
@@ -288,10 +288,9 @@ class RiderOrderQueueView(APIView):
     
     def get(self, request):
         # 🌍 Open Pool Logistics with Proximity Intelligence
-        active_assignments = Q(assigned_rider=request.user, status__in=['assigned', 'picked_up', 'arrived'])
-        available_pool = Q(assigned_rider__isnull=True, status__in=['pending', 'confirmed', 'processing'])
-        
-        queryset = Order.objects.filter(active_assignments | available_pool).select_related('store')
+        # 🛡️ Hardening: Separate assigned orders from available pool to prevent filtering assigned tasks
+        assigned_queryset = Order.objects.filter(assigned_rider=request.user, status__in=['assigned', 'picked_up', 'arrived']).select_related('store')
+        pool_queryset = Order.objects.filter(assigned_rider__isnull=True, status__in=['pending', 'confirmed', 'processing']).select_related('store')
         
         lat = request.query_params.get('lat')
         lng = request.query_params.get('lng')
@@ -301,31 +300,39 @@ class RiderOrderQueueView(APIView):
                 u_lat = float(lat)
                 u_lng = float(lng)
                 
-                # 🛡️ Bounding Box Filter (Approx 15km x 15km)
+                # 🛡️ Bounding Box Filter (Approx 15km x 15km) applied ONLY to available pool
                 deg = 0.15 
-                queryset = queryset.filter(
+                pool_queryset = pool_queryset.filter(
                     store__latitude__range=(u_lat - deg, u_lat + deg),
                     store__longitude__range=(u_lng - deg, u_lng + deg)
                 )
 
                 # 🌍 Annotate distance using high-precision FloatField
-                queryset = queryset.annotate(
+                pool_queryset = pool_queryset.annotate(
                     distance=ExpressionWrapper(
                         Sqrt(Power(F('store__latitude') - u_lat, 2) + Power(F('store__longitude') - u_lng, 2)) * 111.0,
                         output_field=FloatField()
                     )
                 )
+                
+                # Also annotate assigned with 0.0 distance to keep schema consistent for union if needed, 
+                # but we can just use a list combine for simplicity since queryset sizes are small.
+                assigned_queryset = assigned_queryset.annotate(distance=Value(0.0, output_field=FloatField()))
+
             except (ValueError, TypeError):
                 pass
         else:
             if request.user.assigned_store:
-                queryset = queryset.filter(store=request.user.assigned_store)
-            else:
-                queryset = queryset.filter(active_assignments)
+                pool_queryset = pool_queryset.filter(store=request.user.assigned_store)
+            
+            # Annotate with default distance to keep it consistent
+            assigned_queryset = assigned_queryset.annotate(distance=Value(0.0, output_field=FloatField()))
+            pool_queryset = pool_queryset.annotate(distance=Value(0.0, output_field=FloatField()))
 
-        queryset = queryset.order_by('-created_at')
+        # Combine both sets. Assigned tasks ALWAYS take priority.
+        combined_list = list(assigned_queryset) + list(pool_queryset)
         
-        serializer = OrderSerializer(queryset, many=True)
+        serializer = OrderSerializer(combined_list, many=True)
         return Response(serializer.data)
 
 class RiderHistoryView(APIView):
