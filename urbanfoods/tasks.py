@@ -319,7 +319,18 @@ def trigger_stk_push_task(self, order_id, mpesa_phone, contribution_id=None):
             desc = f"Order {order.order_number} Payment"
 
         mpesa = MpesaIntegration(store=order.store)
-        phone = mpesa.format_phone_number(mpesa_phone)
+        
+        # 🛡️ Resiliency: Fallback to user phone if order phone is missing
+        phone_to_use = mpesa_phone or order.phone_number or (order.user.phone if order.user else None)
+        if not phone_to_use:
+            logger.error(f"STK Task Failed: No phone number found for Order {order.order_number}")
+            return "Failed: Missing Phone"
+            
+        try:
+            phone = mpesa.format_phone_number(phone_to_use)
+        except ValueError as ve:
+            logger.error(f"STK Task Failed: Invalid phone format '{phone_to_use}' - {ve}")
+            return f"Failed: Invalid Phone Format"
         
         # 🛡️ Fail-Closed Production Guard
         is_production = str(os.environ.get('MPESA_PRODUCTION', 'false')).lower() == 'true'

@@ -788,6 +788,7 @@ class CustomerPlaceOrderView(APIView):
             return Response(response_data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
+            logger.exception(f"Order Creation Failed for user {request.user.username}")
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 class ShirikiCreateView(APIView):
