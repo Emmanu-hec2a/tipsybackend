@@ -4,7 +4,8 @@ from rest_framework import status
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import Q, F
+from django.db.models import Q, F, ExpressionWrapper, FloatField, Sum
+from django.db.models.functions import Sqrt, Power
 from django.core.cache import cache
 import json
 import logging
@@ -202,14 +203,23 @@ class RiderEarningsSummaryView(APIView):
     permission_classes = [IsRider]
     
     def get(self, request):
-        from django.db.models import Sum
+        # 🛡️ Redis Caching (1 Hour) - Earnings don't need real-time refresh every second
+        cache_key = f"rider_earnings_summary_{request.user.id}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return Response(cached_data)
+
         summary = RiderEarning.objects.filter(rider=request.user).aggregate(
             total_earned=Sum('total'),
             total_base=Sum('base_fare'),
-            total_tips=Sum('tip'),
-            delivery_count=Sum(1) # Count is better here but aggregate Sum(1) works or just .count()
+            total_tips=Sum('tip')
         )
         summary['delivery_count'] = RiderEarning.objects.filter(rider=request.user).count()
+        
+        # Ensure floats for JSON serialization
+        summary = {k: (float(v) if v is not None else 0.0) for k, v in summary.items()}
+        
+        cache.set(cache_key, summary, 3600)
         return Response(summary)
 
 class RiderProfileView(APIView):
@@ -278,47 +288,42 @@ class RiderOrderQueueView(APIView):
     
     def get(self, request):
         # 🌍 Open Pool Logistics with Proximity Intelligence
-        # 1. Active assignments (Always show regardless of distance)
         active_assignments = Q(assigned_rider=request.user, status__in=['assigned', 'picked_up', 'arrived'])
-        
-        # 2. Available pool (Filtered by distance if location provided)
         available_pool = Q(assigned_rider__isnull=True, status__in=['pending', 'confirmed', 'processing'])
+        
+        queryset = Order.objects.filter(active_assignments | available_pool).select_related('store')
         
         lat = request.query_params.get('lat')
         lng = request.query_params.get('lng')
         
-        if lat and lng:
+        if lat is not None and lng is not None:
             try:
                 u_lat = float(lat)
                 u_lng = float(lng)
-                from .utils import haversine_distance_km
                 
-                # Performance: First get all candidate orders
-                candidates = Order.objects.filter(available_pool).select_related('store')
-                
-                # Filter candidates by distance (15km radius for Open Pool)
-                valid_ids = []
-                for order in candidates:
-                    if order.store and order.store.latitude and order.store.longitude:
-                        dist = haversine_distance_km(u_lat, u_lng, order.store.latitude, order.store.longitude)
-                        if dist <= 15: # 15km logistical reach
-                            valid_ids.append(order.id)
-                
-                # Refined available pool: Only nearby orders
-                available_pool = Q(id__in=valid_ids)
-                
+                # 🛡️ Bounding Box Filter (Approx 15km x 15km)
+                deg = 0.15 
+                queryset = queryset.filter(
+                    store__latitude__range=(u_lat - deg, u_lat + deg),
+                    store__longitude__range=(u_lng - deg, u_lng + deg)
+                )
+
+                # 🌍 Annotate distance using high-precision FloatField
+                queryset = queryset.annotate(
+                    distance=ExpressionWrapper(
+                        Sqrt(Power(F('store__latitude') - u_lat, 2) + Power(F('store__longitude') - u_lng, 2)) * 111.0,
+                        output_field=FloatField()
+                    )
+                )
             except (ValueError, TypeError):
                 pass
         else:
-            # 🛡️ Fallback: If Rider Location is OFF, show only their 'Home Store' available orders
-            # This prevents overwhelming the rider with distant orders they can't fulfill
             if request.user.assigned_store:
-                available_pool &= Q(store=request.user.assigned_store)
+                queryset = queryset.filter(store=request.user.assigned_store)
             else:
-                # No location and no home store = No available orders (Security/Efficiency gate)
-                available_pool = Q(pk__in=[])
+                queryset = queryset.filter(active_assignments)
 
-        queryset = Order.objects.filter(active_assignments | available_pool).order_by('-created_at')
+        queryset = queryset.order_by('-created_at')
         
         serializer = OrderSerializer(queryset, many=True)
         return Response(serializer.data)

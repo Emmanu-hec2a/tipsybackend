@@ -5,7 +5,7 @@ from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import os
 from django.shortcuts import get_object_or_404
-from django.db.models import Q, F, ExpressionWrapper, DecimalField, Avg, Exists, OuterRef, Value, BooleanField, Count
+from django.db.models import Q, F, ExpressionWrapper, DecimalField, FloatField, Avg, Exists, OuterRef, Value, BooleanField, Count
 from django.db.models.functions import Sqrt, Power
 from .models import (
     Store, FoodItem, Order, Rating, SavedAddress, OrderItem, 
@@ -76,7 +76,6 @@ class CustomerProfileView(APIView):
         logger.warning(f"Profile Update Failed for {request.user.username}: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-@method_decorator(cache_page(60*5), name='dispatch')
 class CustomerStoreListView(generics.ListAPIView):
     serializer_class = StoreSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -111,7 +110,7 @@ class CustomerStoreListView(generics.ListAPIView):
         if is_pro_only == 'true':
             queryset = queryset.filter(is_pro=True)
 
-        if lat and lng:
+        if lat is not None and lng is not None:
             try:
                 u_lat = float(lat)
                 u_lng = float(lng)
@@ -126,13 +125,14 @@ class CustomerStoreListView(generics.ListAPIView):
                 )
 
                 # Annotate distance for sorting only on the filtered small subset
+                # 🛡️ Hardening: Use FloatField for mathematical operations to avoid precision loss or truncation
                 queryset = queryset.annotate(
                     distance=ExpressionWrapper(
-                        Sqrt(Power(F('latitude') - u_lat, 2) + Power(F('longitude') - u_lng, 2)) * 111,
-                        output_field=DecimalField()
+                        Sqrt(Power(F('latitude') - u_lat, 2) + Power(F('longitude') - u_lng, 2)) * 111.0,
+                        output_field=FloatField()
                     )
                 ).order_by('-is_pro', 'distance')
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
         
         # 🛡️ Limit for Home Screen / Popular List to prevent 1000+ items load

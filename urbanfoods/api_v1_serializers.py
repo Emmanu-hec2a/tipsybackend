@@ -108,7 +108,7 @@ class RiderProfileSerializer(serializers.ModelSerializer):
         read_only_fields = ['avg_rating', 'total_deliveries', 'loyalty_points', 'role']
 
 class StoreSerializer(serializers.ModelSerializer):
-    distance = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True, required=False)
+    distance = serializers.FloatField(read_only=True, required=False)
     dynamic_delivery_fee = serializers.SerializerMethodField()
     is_favourite = serializers.SerializerMethodField()
     is_open = serializers.SerializerMethodField()
