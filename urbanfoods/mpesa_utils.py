@@ -17,12 +17,18 @@ logger = logging.getLogger(__name__)
 # =========================
 def get_encryption_key():
     """Get encryption key from settings/env. Generates one if missing (NOT FOR PRODUCTION)."""
+    from django.conf import settings
     key = getattr(settings, 'ENCRYPTION_KEY', os.environ.get('ENCRYPTION_KEY'))
     if not key:
-        logger.warning("ENCRYPTION_KEY not found in settings or env. This is insecure for production.")
-        # Fallback for development/testing ONLY. 
+        logger.warning("ENCRYPTION_KEY not found in settings or env. Using fallback key.")
         return b'6csUuoMhN7dvrad3XaJ5ApYcFPV2AEFtlwSUEAzoREU='
-    return key.encode() if isinstance(key, str) else key
+    
+    # Ensure it's bytes
+    if isinstance(key, str):
+        # Clean up any quotes or whitespace
+        key = key.strip().strip("'").strip('"')
+        return key.encode()
+    return key
 
 def encrypt_value(value):
     if not value: return None
@@ -31,11 +37,13 @@ def encrypt_value(value):
 
 def decrypt_value(encrypted_value):
     if not encrypted_value: return None
+    key = get_encryption_key()
     try:
-        f = Fernet(get_encryption_key())
+        f = Fernet(key)
         return f.decrypt(encrypted_value.encode()).decode()
-    except Exception:
-        logger.error("Failed to decrypt M-Pesa credential. Check ENCRYPTION_KEY.")
+    except Exception as e:
+        logger.error(f"Failed to decrypt M-Pesa credential. Error: {str(e)}")
+        # Check if it's a padding or key error which usually means wrong key
         return None
 
 # =========================
