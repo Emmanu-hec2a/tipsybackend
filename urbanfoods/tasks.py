@@ -291,6 +291,68 @@ def calculate_rider_weekly_stats():
     logger.info(f"Generated {count} RiderWeeklyStat records for week {week_start}")
     return f"Generated {count} stats"
 
+@shared_task(bind=True, max_retries=3)
+def retry_unmatched_callback_task(self, callback_data, attempt=1):
+    """
+    Retries matching an M-Pesa callback to an Order/ShirikiContribution.
+    Exists to cover the race where Safaricom's callback arrives before
+    trigger_stk_push_task has finished saving checkout_request_id to the DB.
+    """
+    from .models import Order, ShirikiContribution
+    from django.db import transaction
+
+    stk_callback = callback_data.get('Body', {}).get('stkCallback', {})
+    checkout_request_id = stk_callback.get('CheckoutRequestID')
+
+    if not checkout_request_id:
+        logger.error("retry_unmatched_callback_task: missing CheckoutRequestID, dropping")
+        return "No CheckoutRequestID"
+
+    order = None
+    contribution = None
+
+    try:
+        order = Order.objects.select_related('user').get(
+            mpesa_checkout_request_id=checkout_request_id
+        )
+    except Order.DoesNotExist:
+        try:
+            contribution = ShirikiContribution.objects.select_related(
+                'session__order', 'user'
+            ).get(checkout_request_id=checkout_request_id)
+            order = contribution.session.order
+        except ShirikiContribution.DoesNotExist:
+            order = None
+
+    if order is None:
+        if attempt < 4:
+            # Backoff: 3s, 8s, 20s — covers realistic DB-write delay without hammering
+            delays = {1: 3, 2: 8, 3: 20}
+            logger.warning(
+                "Callback still unmatched (attempt %s) for CheckoutRequestID: %s — retrying",
+                attempt, checkout_request_id
+            )
+            retry_unmatched_callback_task.apply_async(
+                args=[callback_data, attempt + 1],
+                countdown=delays[attempt]
+            )
+            return f"Requeued attempt {attempt + 1}"
+        else:
+            # Genuinely unmatched after ~30s total — this is no longer a timing issue.
+            logger.error(
+                "Callback PERMANENTLY unmatched for CheckoutRequestID: %s. "
+                "Manual reconciliation required. Raw: %s",
+                checkout_request_id, json.dumps(callback_data)
+            )
+            # Optional: wire in an alert here (Slack webhook, email to yourself, etc.)
+            # so a lost payment surfaces immediately instead of waiting for a customer complaint.
+            return "Permanently unmatched — needs manual reconciliation"
+
+    # Found it — replay the same processing logic the main callback view uses.
+    from .views import process_mpesa_callback_data  # see note below
+    process_mpesa_callback_data(callback_data, order=order, contribution=contribution)
+    return f"Matched and processed on attempt {attempt}"
+
 @shared_task(rate_limit='50/s', bind=True, max_retries=3)
 def trigger_stk_push_task(self, order_id, mpesa_phone, contribution_id=None):
     """

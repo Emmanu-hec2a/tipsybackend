@@ -971,19 +971,167 @@ def place_order(request):
         'estimated_delivery': estimated_delivery.strftime('%I:%M %p'),
     })
 
+def process_mpesa_callback_data(callback_data, order, contribution=None):
+    """
+    Processes a matched M-Pesa callback: idempotency, audit trail, and
+    payment confirmation/failure for both standard Orders and Shiriki
+    contributions. Called directly from mpesa_callback() on the fast path,
+    and from retry_unmatched_callback_task() when the match was delayed.
+    """
+    stk_callback = callback_data.get('Body', {}).get('stkCallback', {})
+    result_code = stk_callback.get('ResultCode')
+    result_desc = stk_callback.get('ResultDesc', '')
+    checkout_request_id = stk_callback.get('CheckoutRequestID')
+
+    # ── Idempotency guard ──
+    if not contribution and order.payment_status == 'paid':
+        return
+    if contribution and contribution.status == 'confirmed':
+        return
+
+    # ── Parse callback metadata ──
+    metadata = stk_callback.get('CallbackMetadata', {}).get('Item', [])
+    mpesa_receipt = None
+    callback_phone = None
+    amount = None
+
+    for item in metadata:
+        name = item.get('Name')
+        if name == 'MpesaReceiptNumber':
+            mpesa_receipt = item.get('Value')
+        elif name == 'PhoneNumber':
+            callback_phone = item.get('Value')
+        elif name == 'Amount':
+            amount = item.get('Value')
+
+    # ── Always persist the raw transaction (audit trail) ──
+    MpesaTransaction.objects.create(
+        order=order,
+        checkout_request_id=checkout_request_id,
+        mpesa_receipt_number=mpesa_receipt,
+        phone_number=str(callback_phone) if callback_phone else '',
+        amount=Decimal(str(amount)) if amount else Decimal('0.00'),
+        result_code=result_code,
+        result_desc=result_desc,
+        raw_callback=callback_data,
+    )
+
+    # Log structured
+    log_mpesa_event(
+        event_type="callback_received",
+        user_id=order.user.id,
+        order_number=order.order_number,
+        phone=str(callback_phone),
+        amount=amount,
+        extra={
+            "checkout_request_id": checkout_request_id,
+            "result_code": result_code,
+            "result_desc": result_desc,
+        }
+    )
+
+    # ── Payment failed ──
+    if result_code != 0:
+        if contribution:
+            contribution.status = 'failed'
+            contribution.save()
+        else:
+            _fail_payment(order, reason=result_desc)
+        return
+
+    # ── Shiriki Contribution Logic ──
+    if contribution:
+        with transaction.atomic():
+            # High-Concurrency Guard: Lock the session record for final completion check
+            session = ShirikiSession.objects.select_for_update().get(id=contribution.session.id)
+
+            if contribution.status == 'confirmed':
+                return
+
+            contribution.status = 'confirmed'
+            contribution.paid_at = timezone.now()
+            contribution.save()
+
+            # LOYALTY: Give points to the contributor
+            contribution.user.loyalty_points = F('loyalty_points') + int(contribution.amount)
+            contribution.user.save(update_fields=['loyalty_points'])
+
+            # ATOMIC Pot Check: Safely aggregate confirmed payments
+            total_paid = session.contributions.filter(
+                status='confirmed'
+            ).aggregate(Sum('amount'))['amount__sum'] or 0
+
+            # Notify ALL participants of the progress (Real-time Sync)
+            try:
+                from .utils import notify_shiriki_progress_task
+                notify_shiriki_progress_task.delay(
+                    session.id, contribution.user.id, float(contribution.amount)
+                )
+            except Exception as e:
+                logger.error(f"Failed to queue Shiriki progress notification: {e}")
+
+            if total_paid >= (session.order.total - Decimal('0.01')):  # Buffer for rounding
+                session.status = 'completed'
+                session.save()
+
+                # Finalize the whole order
+                _confirm_payment(
+                    session.order,
+                    receipt_number=mpesa_receipt,
+                    notes=f'Shiriki Pot completed. Final receipt: {mpesa_receipt}',
+                )
+        return
+
+    # ── Standard Single Payment Logic ──
+    # ── Validate amount ──
+    is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
+    received_amount = Decimal(str(amount))
+
+    # In sandbox/test mode, we often pay 1.0.
+    # In production, we expect the EXACT total.
+    is_valid_amount = (received_amount == order.total) or (
+        not is_production and received_amount == Decimal('1.0')
+    )
+
+    if not is_valid_amount:
+        _fail_payment(order, reason=f'Amount mismatch: received {amount} expected {order.total}')
+        logger.error(
+            "Amount mismatch on order %s: received %s expected %s",
+            order.order_number, amount, order.total,
+        )
+        return
+
+    # ── Validate phone ──
+    # Relaxed matching for testing/production flexibility
+    def clean_phone(p):
+        return ''.join(filter(str.isdigit, str(p)))[-9:]
+
+    if callback_phone and order.phone_number:
+        if clean_phone(callback_phone) != clean_phone(order.phone_number):
+            logger.warning(
+                "Phone mismatch on order %s: received %s expected %s. Proceeding since CheckoutID matches.",
+                order.order_number, callback_phone, order.phone_number,
+            )
+
+    # ── All checks passed — confirm payment ──
+    with transaction.atomic():
+        _confirm_payment(
+            order,
+            receipt_number=mpesa_receipt,
+            notes=f'Payment confirmed via callback. Receipt: {mpesa_receipt}',
+        )
+
 
 # ─────────────────────────────────────────────────────────────
 #  M-PESA CALLBACK  (called by Safaricom — no auth, IP-guarded)
 # ─────────────────────────────────────────────────────────────
-@csrf_exempt                  # Safaricom cannot send CSRF tokens
-@safaricom_ip_required        # Only accept known Safaricom IPs
+@csrf_exempt
+@safaricom_ip_required
 @require_http_methods(["POST"])
 def mpesa_callback(request):
     try:
         callback_data = json.loads(request.body)
         stk_callback = callback_data.get('Body', {}).get('stkCallback', {})
-        result_code = stk_callback.get('ResultCode')
-        result_desc = stk_callback.get('ResultDesc', '')
         checkout_request_id = stk_callback.get('CheckoutRequestID')
 
         if not checkout_request_id:
@@ -995,18 +1143,24 @@ def mpesa_callback(request):
             )
             contribution = None
         except Order.DoesNotExist:
-            # 🛡️ Shiriki Pay Path: Check for individual contributions
             try:
-                contribution = ShirikiContribution.objects.select_related('session__order', 'user').get(
-                    checkout_request_id=checkout_request_id
-                )
+                contribution = ShirikiContribution.objects.select_related(
+                    'session__order', 'user'
+                ).get(checkout_request_id=checkout_request_id)
                 order = contribution.session.order
             except ShirikiContribution.DoesNotExist:
+                retry_unmatched_callback_task.delay(callback_data, attempt=1)
                 logger.warning(
-                    "Callback received for unknown CheckoutRequestID: %s",
-                    checkout_request_id,
+                    "Callback unmatched, queued for retry: %s", checkout_request_id
                 )
                 return HttpResponse("OK")
+
+        process_mpesa_callback_data(callback_data, order, contribution)
+
+    except Exception:
+        logger.exception("Unhandled error in mpesa_callback")
+
+    return HttpResponse("OK")
 
         # ── Idempotency guard ──
         if not contribution and order.payment_status == 'paid':
