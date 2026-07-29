@@ -42,8 +42,12 @@ def decrypt_value(encrypted_value):
         f = Fernet(key)
         return f.decrypt(encrypted_value.encode()).decode()
     except Exception as e:
-        logger.error(f"Failed to decrypt M-Pesa credential. Error: {str(e)}")
-        # Check if it's a padding or key error which usually means wrong key
+        # Use more descriptive exception logging
+        from cryptography.fernet import InvalidToken
+        if isinstance(e, InvalidToken):
+            logger.error("Failed to decrypt M-Pesa credential: Invalid Token (Wrong ENCRYPTION_KEY?)")
+        else:
+            logger.error(f"Failed to decrypt M-Pesa credential. Error Type: {type(e).__name__}")
         return None
 
 # =========================

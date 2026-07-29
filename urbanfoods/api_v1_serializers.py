@@ -9,6 +9,7 @@ from .models import (
     RiderWeeklyStat, PanicAlert
 )
 from django.db.models import Sum
+from .mpesa_utils import encrypt_value
 
 class UserSerializer(serializers.ModelSerializer):
     def validate_phone(self, value):
@@ -156,10 +157,13 @@ class StoreSerializer(serializers.ModelSerializer):
         # Sync the main 'phone' field to the legacy 'phone_number' field for safety
         phone = validated_data.get('phone')
         if phone:
-            # Always ensure legacy field has a zero-prefixed or clean version if needed
-            # but M-Pesa utils handle the conversion.
             instance.phone_number = '0' + phone if not phone.startswith('0') else phone
-            
+
+        # Encrypt M-Pesa credentials before saving
+        for field in ('mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_passkey'):
+            if field in validated_data and validated_data[field]:
+                validated_data[field] = encrypt_value(validated_data[field])
+
         return super().update(instance, validated_data)
 
     class Meta:
@@ -177,6 +181,11 @@ class StoreSerializer(serializers.ModelSerializer):
             'mpesa_shortcode', 'mpesa_consumer_key', 'mpesa_consumer_secret',
             'mpesa_passkey', 'mpesa_callback_url', 'has_active_promotions', 'max_promo_discount'
         ]
+        extra_kwargs = {
+            'mpesa_consumer_key': {'write_only': True},
+            'mpesa_consumer_secret': {'write_only': True},
+            'mpesa_passkey': {'write_only': True},
+        }
         read_only_fields = ['owner', 'rating', 'rating_count', 'is_pro', 'plan', 'plan_price', 'subscription_expires', 'billing_status']
 
     def get_dynamic_delivery_fee(self, obj):

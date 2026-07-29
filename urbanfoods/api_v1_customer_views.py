@@ -321,6 +321,13 @@ class CustomerMpesaQueryView(APIView):
         from .mpesa_utils import MpesaIntegration
         mpesa = MpesaIntegration(store=order.store)
         
+        # 🛡️ Hardening: Ensure store has credentials before querying
+        if not mpesa.consumer_key or not mpesa.consumer_secret:
+            return Response({
+                'status': 'error', 
+                'message': f'Payment status cannot be queried because {order.store.name} has not configured their M-Pesa API keys.'
+            }, status=400)
+        
         try:
             result = mpesa.query_stk_status(order.mpesa_checkout_request_id)
             
