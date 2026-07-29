@@ -19,6 +19,7 @@ from .api_v1_serializers import (
     PromotionSerializer, ChatMessageSerializer,
     ShirikiSessionSerializer, ShirikiContributionSerializer
 )
+
 import string
 import random
 from decimal import Decimal
