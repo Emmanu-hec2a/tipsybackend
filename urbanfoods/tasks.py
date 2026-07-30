@@ -12,6 +12,7 @@ from django.db.models import Sum
 from datetime import timedelta
 import logging
 
+
 logger = logging.getLogger(__name__)
 
 @shared_task(rate_limit='5000/m')
@@ -356,39 +357,69 @@ def retry_unmatched_callback_task(self, callback_data, attempt=1):
 @shared_task
 def reconcile_pending_mpesa_payments():
     """
-    Runs periodically (e.g. every 2 minutes via Celery beat).
-    Catches contributions/orders whose callback never arrived by
-    actively querying Safaricom for the true status.
+    Catches contributions/orders whose M-Pesa callback never arrived,
+    by actively querying Safaricom for the true status.
+    Runs every 2 minutes via Celery Beat.
     """
-    from .models import ShirikiContribution, Order
     from datetime import timedelta
+    from .models import ShirikiContribution, Order
+    from .views import process_mpesa_callback_data
 
-    cutoff = timezone.now() - timedelta(minutes=2)  # give the callback a fair chance first
-    stale_cutoff = timezone.now() - timedelta(hours=1)  # don't query ancient stuck ones forever
+    cutoff = timezone.now() - timedelta(minutes=2)
+    stale_cutoff = timezone.now() - timedelta(hours=1)
 
+    # ── Shiriki contributions stuck pending ──
     pending_contributions = ShirikiContribution.objects.filter(
         status='pending',
         checkout_request_id__isnull=False,
         created_at__lt=cutoff,
         created_at__gt=stale_cutoff,
-    ).select_related('session__order')
+    ).select_related('session__order__store')
 
     for contribution in pending_contributions:
-        mpesa = MpesaIntegration(store=contribution.session.order.store)
-        result = mpesa.query_stk_status(contribution.checkout_request_id)
+        _reconcile_one(contribution.checkout_request_id, contribution.session.order, contribution)
 
-        if result.get('success') and result.get('result_code') not in (None, '4999'):
-            # We got a definitive answer — build a synthetic callback and process it
-            fake_callback = {
-                'Body': {'stkCallback': {
-                    'CheckoutRequestID': contribution.checkout_request_id,
-                    'ResultCode': int(result['result_code']),
-                    'ResultDesc': result.get('result_desc', ''),
-                    'CallbackMetadata': {'Item': []},  # receipt/amount unavailable via query
-                }}
-            }
-            process_mpesa_callback_data(fake_callback, contribution.session.order, contribution)
+    # ── Standard orders stuck pending ──
+    pending_orders = Order.objects.filter(
+        payment_status='pending',
+        mpesa_checkout_request_id__isnull=False,
+    ).exclude(mpesa_checkout_request_id='').filter(
+        created_at__lt=cutoff,
+        created_at__gt=stale_cutoff,
+    ).select_related('store')
 
+    for order in pending_orders:
+        _reconcile_one(order.mpesa_checkout_request_id, order, None)
+
+
+def _reconcile_one(checkout_request_id, order, contribution):
+    from .views import process_mpesa_callback_data
+    try:
+        mpesa = MpesaIntegration(store=order.store)
+        result = mpesa.query_stk_status(checkout_request_id)
+
+        if not result.get('success'):
+            return  # network/auth error querying — try again next run
+
+        result_code = result.get('result_code')
+        if result_code in (None, '4999'):
+            return  # Safaricom itself says still processing — try again next run
+
+        fake_callback = {
+            'Body': {'stkCallback': {
+                'CheckoutRequestID': checkout_request_id,
+                'ResultCode': int(result_code),
+                'ResultDesc': result.get('result_desc', ''),
+                'CallbackMetadata': {'Item': []},
+            }}
+        }
+        logger.info(
+            "Reconciliation resolved stuck payment: %s (result_code=%s)",
+            checkout_request_id, result_code
+        )
+        process_mpesa_callback_data(fake_callback, order, contribution)
+    except Exception:
+        logger.exception(f"Reconciliation failed for checkout_request_id={checkout_request_id}")
 
 @shared_task(rate_limit='50/s', bind=True, max_retries=3)
 def trigger_stk_push_task(self, order_id, mpesa_phone, contribution_id=None):
