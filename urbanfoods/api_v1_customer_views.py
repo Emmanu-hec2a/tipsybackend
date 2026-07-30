@@ -22,7 +22,7 @@ from .api_v1_serializers import (
 
 import string
 import random
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from django.db.models import Sum
 from django.utils import timezone
 from .permissions import IsCustomer
@@ -847,48 +847,55 @@ class ShirikiContributeView(APIView):
         invite_code = request.data.get('invite_code')
         amount = request.data.get('amount')
         phone = request.data.get('phone')
-        
+
         if not all([invite_code, amount, phone]):
             return Response({'error': 'Missing required fields'}, status=400)
-            
+
         try:
-            session = ShirikiSession.objects.get(invite_code=invite_code, status='active')
-        except ShirikiSession.DoesNotExist:
-            return Response({'error': 'Active session not found'}, status=404)
-            
-        # Validate amount
-        try:
-            amount = float(amount)
+            amount = Decimal(str(amount))
             if amount <= 0:
                 raise ValueError
-        except ValueError:
+        except (ValueError, InvalidOperation):
             return Response({'error': 'Invalid amount'}, status=400)
-            
-        # Check if amount exceeds remaining balance
-        current_confirmed = session.contributions.filter(status='confirmed').aggregate(Sum('amount'))['amount__sum'] or 0
-        remaining = float(session.order.total) - float(current_confirmed)
-        
-        if amount > (remaining + 0.01): # Small buffer for floating point
-            return Response({'error': f'Amount exceeds remaining balance of {remaining}'}, status=400)
-            
-        # Initiate STK Push
-        # Create contribution record FIRST
-        contribution = ShirikiContribution.objects.create(
-            session=session,
-            user=request.user,
-            amount=amount,
-            phone_number=phone,
-            status='pending'
-        )
 
-        # --- ASYNC Shiriki Logic (High Concurrency Ready) ---
+        try:
+            with transaction.atomic():
+                try:
+                    session = ShirikiSession.objects.select_for_update().get(
+                        invite_code=invite_code, status='active'
+                    )
+                except ShirikiSession.DoesNotExist:
+                    return Response({'error': 'Active session not found'}, status=404)
+
+                current_confirmed = session.contributions.filter(
+                    status='confirmed'
+                ).aggregate(Sum('amount_applied_to_pot'))['amount_applied_to_pot__sum'] or Decimal('0')
+
+                remaining = session.order.total - current_confirmed
+
+                if amount > (remaining + Decimal('0.01')):
+                    return Response(
+                        {'error': f'Amount exceeds remaining balance of {remaining}'}, status=400
+                    )
+
+                contribution = ShirikiContribution.objects.create(
+                    session=session,
+                    user=request.user,
+                    amount=amount,
+                    phone_number=phone,
+                    status='pending'
+                )
+        except Exception:
+            logger.exception("Error creating Shiriki contribution")
+            return Response({'error': 'Something went wrong. Please try again.'}, status=500)
+
         from .tasks import trigger_stk_push_task
         trigger_stk_push_task.delay(
-            order_id=session.order.id, 
+            order_id=session.order.id,
             mpesa_phone=phone,
             contribution_id=contribution.id
         )
-        
+
         return Response({
             'success': True,
             'contribution_id': contribution.id,

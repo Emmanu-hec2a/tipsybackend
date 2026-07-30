@@ -804,6 +804,8 @@ class ShirikiContribution(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     paid_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    amount_applied_to_pot = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    wallet_credit_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
 
     def __str__(self):
         return f"{self.user.username} - {self.amount} for {self.session.invite_code}"

@@ -976,14 +976,15 @@ def process_mpesa_callback_data(callback_data, order, contribution=None):
     Processes a matched M-Pesa callback: idempotency, audit trail, and
     payment confirmation/failure for both standard Orders and Shiriki
     contributions. Called directly from mpesa_callback() on the fast path,
-    and from retry_unmatched_callback_task() when the match was delayed.
+    from retry_unmatched_callback_task() when the match was delayed, and
+    from reconcile_pending_mpesa_payments() when the real callback never arrives.
     """
     stk_callback = callback_data.get('Body', {}).get('stkCallback', {})
     result_code = stk_callback.get('ResultCode')
     result_desc = stk_callback.get('ResultDesc', '')
     checkout_request_id = stk_callback.get('CheckoutRequestID')
 
-    # ── Idempotency guard ──
+    # ── Idempotency guard (cheap early-exit check; real guard is under the lock below) ──
     if not contribution and order.payment_status == 'paid':
         return
     if contribution and contribution.status == 'confirmed':
@@ -1039,31 +1040,71 @@ def process_mpesa_callback_data(callback_data, order, contribution=None):
             _fail_payment(order, reason=result_desc)
         return
 
-    # ── Shiriki Contribution Logic ──
+    # ── Shiriki Contribution Logic (overflow-safe) ──
     if contribution:
         with transaction.atomic():
             # High-Concurrency Guard: Lock the session record for final completion check
             session = ShirikiSession.objects.select_for_update().get(id=contribution.session.id)
 
+            # Re-fetch contribution UNDER THE LOCK — never trust the object passed in.
+            # Closes the race where two callers (real callback + retry task, or
+            # retry task + reconciliation task) both pass the early idempotency
+            # check above before either has actually confirmed the row.
+            contribution = ShirikiContribution.objects.select_for_update().get(id=contribution.id)
+
             if contribution.status == 'confirmed':
                 return
 
-            contribution.status = 'confirmed'
-            contribution.paid_at = timezone.now()
-            contribution.save()
+            # Sum only what OTHER contributions have actually applied to the pot —
+            # excludes this contribution itself, since it isn't confirmed yet.
+            confirmed_applied = session.contributions.filter(
+                status='confirmed'
+            ).exclude(id=contribution.id).aggregate(
+                Sum('amount_applied_to_pot')
+            )['amount_applied_to_pot__sum'] or Decimal('0')
 
-            # LOYALTY: Give points to the contributor
+            remaining_capacity = session.order.total - confirmed_applied
+            amount_paid = contribution.amount
+
+            if amount_paid > remaining_capacity:
+                # Overflow: pot filled by someone else while this STK push was
+                # in flight. Money is real and already deducted — never discard it.
+                applied = max(remaining_capacity, Decimal('0'))
+                overflow = amount_paid - applied
+
+                contribution.amount_applied_to_pot = applied
+                contribution.wallet_credit_amount = overflow
+                contribution.status = 'confirmed'
+                contribution.paid_at = timezone.now()
+                contribution.save()
+
+                contribution.user.wallet_balance = F('wallet_balance') + overflow
+                contribution.user.save(update_fields=['wallet_balance'])
+
+                logger.info(
+                    "Shiriki pot overflow: contribution %s paid KSh %s, "
+                    "only KSh %s applied to pot, KSh %s credited to user %s wallet",
+                    contribution.id, amount_paid, applied, overflow, contribution.user.id
+                )
+            else:
+                contribution.amount_applied_to_pot = amount_paid
+                contribution.status = 'confirmed'
+                contribution.paid_at = timezone.now()
+                contribution.save()
+
+            # LOYALTY: Give points on the FULL amount paid, regardless of overflow —
+            # the person genuinely paid that much, points reward the payment itself.
             contribution.user.loyalty_points = F('loyalty_points') + int(contribution.amount)
             contribution.user.save(update_fields=['loyalty_points'])
 
-            # ATOMIC Pot Check: Safely aggregate confirmed payments
+            # ATOMIC Pot Check: sum what's actually been applied, not raw amounts
             total_paid = session.contributions.filter(
                 status='confirmed'
-            ).aggregate(Sum('amount'))['amount__sum'] or 0
+            ).aggregate(Sum('amount_applied_to_pot'))['amount_applied_to_pot__sum'] or 0
 
             # Notify ALL participants of the progress (Real-time Sync)
             try:
-                from .utils import notify_shiriki_progress_task
+                from .tasks import notify_shiriki_progress_task
                 notify_shiriki_progress_task.delay(
                     session.id, contribution.user.id, float(contribution.amount)
                 )
@@ -1082,13 +1123,10 @@ def process_mpesa_callback_data(callback_data, order, contribution=None):
                 )
         return
 
-    # ── Standard Single Payment Logic ──
-    # ── Validate amount ──
+    # ── Standard Single Payment Logic (unchanged) ──
     is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
     received_amount = Decimal(str(amount))
 
-    # In sandbox/test mode, we often pay 1.0.
-    # In production, we expect the EXACT total.
     is_valid_amount = (received_amount == order.total) or (
         not is_production and received_amount == Decimal('1.0')
     )
@@ -1101,8 +1139,6 @@ def process_mpesa_callback_data(callback_data, order, contribution=None):
         )
         return
 
-    # ── Validate phone ──
-    # Relaxed matching for testing/production flexibility
     def clean_phone(p):
         return ''.join(filter(str.isdigit, str(p)))[-9:]
 
@@ -1113,7 +1149,6 @@ def process_mpesa_callback_data(callback_data, order, contribution=None):
                 order.order_number, callback_phone, order.phone_number,
             )
 
-    # ── All checks passed — confirm payment ──
     with transaction.atomic():
         _confirm_payment(
             order,

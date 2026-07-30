@@ -353,6 +353,43 @@ def retry_unmatched_callback_task(self, callback_data, attempt=1):
     process_mpesa_callback_data(callback_data, order=order, contribution=contribution)
     return f"Matched and processed on attempt {attempt}"
 
+@shared_task
+def reconcile_pending_mpesa_payments():
+    """
+    Runs periodically (e.g. every 2 minutes via Celery beat).
+    Catches contributions/orders whose callback never arrived by
+    actively querying Safaricom for the true status.
+    """
+    from .models import ShirikiContribution, Order
+    from datetime import timedelta
+
+    cutoff = timezone.now() - timedelta(minutes=2)  # give the callback a fair chance first
+    stale_cutoff = timezone.now() - timedelta(hours=1)  # don't query ancient stuck ones forever
+
+    pending_contributions = ShirikiContribution.objects.filter(
+        status='pending',
+        checkout_request_id__isnull=False,
+        created_at__lt=cutoff,
+        created_at__gt=stale_cutoff,
+    ).select_related('session__order')
+
+    for contribution in pending_contributions:
+        mpesa = MpesaIntegration(store=contribution.session.order.store)
+        result = mpesa.query_stk_status(contribution.checkout_request_id)
+
+        if result.get('success') and result.get('result_code') not in (None, '4999'):
+            # We got a definitive answer — build a synthetic callback and process it
+            fake_callback = {
+                'Body': {'stkCallback': {
+                    'CheckoutRequestID': contribution.checkout_request_id,
+                    'ResultCode': int(result['result_code']),
+                    'ResultDesc': result.get('result_desc', ''),
+                    'CallbackMetadata': {'Item': []},  # receipt/amount unavailable via query
+                }}
+            }
+            process_mpesa_callback_data(fake_callback, contribution.session.order, contribution)
+
+
 @shared_task(rate_limit='50/s', bind=True, max_retries=3)
 def trigger_stk_push_task(self, order_id, mpesa_phone, contribution_id=None):
     """
