@@ -13,6 +13,7 @@ import json
 import uuid
 from urbanfoods.notifications import send_admin_order_notification, send_customer_order_confirmation
 from urbanfoods.utils import notify_new_order
+from .tasks import retry_unmatched_callback_task
 import logging
 # from .mpesa_utils import mpesa  # Removed global instance
 from .models import MpesaTransaction, OrderStatusHistory
@@ -1102,14 +1103,17 @@ def process_mpesa_callback_data(callback_data, order, contribution=None):
                 status='confirmed'
             ).aggregate(Sum('amount_applied_to_pot'))['amount_applied_to_pot__sum'] or 0
 
-            # Notify ALL participants of the progress (Real-time Sync)
+            # 🔔 UBER-HARDENING: Send specific notification to Host + Progress broadcast
             try:
+                from .utils import notify_shiriki_contribution
+                notify_shiriki_contribution(contribution)
+                
                 from .tasks import notify_shiriki_progress_task
                 notify_shiriki_progress_task.delay(
                     session.id, contribution.user.id, float(contribution.amount)
                 )
             except Exception as e:
-                logger.error(f"Failed to queue Shiriki progress notification: {e}")
+                logger.error(f"Failed to trigger Shiriki notifications: {e}")
 
             if total_paid >= (session.order.total - Decimal('0.01')):  # Buffer for rounding
                 session.status = 'completed'

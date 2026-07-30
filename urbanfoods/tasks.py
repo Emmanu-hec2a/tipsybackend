@@ -521,19 +521,14 @@ def notify_shiriki_progress_task(session_id, contributor_id, amount):
         session = ShirikiSession.objects.select_related('order', 'host').get(id=session_id)
         contributor = User.objects.get(id=contributor_id)
         
-        # Get all participants (Host + confirmed contributors)
-        participant_ids = list(ShirikiContribution.objects.filter(
-            session=session, 
-            status='confirmed'
-        ).values_list('user_id', flat=True))
+        # Calculate current total for the update
+        confirmed_qs = ShirikiContribution.objects.filter(session=session, status='confirmed')
+        current_total = float(confirmed_qs.aggregate(Sum('amount_applied_to_pot'))['amount_applied_to_pot__sum'] or 0)
+        
+        # Determine unique participants to notify (Host + anyone who has contributed)
+        participant_ids = list(confirmed_qs.values_list('user_id', flat=True))
         participant_ids.append(session.host.id)
         unique_participants = list(set(participant_ids))
-        
-        # Calculate current total for the update
-        current_total = float(ShirikiContribution.objects.filter(
-            session=session, 
-            status='confirmed'
-        ).aggregate(Sum('amount'))['amount__sum'] or 0)
         
         title = "Pot Filling Up! 🥂"
         body = f"{contributor.first_name or contributor.username} added KSh {amount} to the pot."
