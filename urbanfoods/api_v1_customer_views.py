@@ -875,7 +875,11 @@ class ShirikiContributeView(APIView):
 
                 if amount > (remaining + Decimal('0.01')):
                     return Response(
-                        {'error': f'Amount exceeds remaining balance of {remaining}'}, status=400
+                        {
+                            'error': f'Amount exceeds remaining balance of {remaining}',
+                            'remaining': float(remaining)
+                        }, 
+                        status=400
                     )
 
                 contribution = ShirikiContribution.objects.create(

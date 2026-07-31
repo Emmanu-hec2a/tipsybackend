@@ -684,7 +684,7 @@ class ShirikiContributionSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = ShirikiContribution
-        fields = ['id', 'username', 'amount', 'status', 'paid_at', 'created_at']
+        fields = ['id', 'user_id', 'username', 'amount', 'status', 'paid_at', 'created_at', 'wallet_credit_amount']
 
 class ShirikiSessionSerializer(serializers.ModelSerializer):
     contributions = ShirikiContributionSerializer(many=True, read_only=True)
@@ -703,7 +703,10 @@ class ShirikiSessionSerializer(serializers.ModelSerializer):
         ]
 
     def get_amount_collected(self, obj):
-        return obj.contributions.filter(status='confirmed').aggregate(Sum('amount'))['amount__sum'] or 0
+        from django.db.models import Sum
+        return obj.contributions.filter(status='confirmed').aggregate(
+            Sum('amount_applied_to_pot')
+        )['amount_applied_to_pot__sum'] or 0
 
 class RiderWeeklyStatSerializer(serializers.ModelSerializer):
     rider_name = serializers.ReadOnlyField(source='rider.get_full_name')

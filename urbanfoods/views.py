@@ -1039,6 +1039,24 @@ def process_mpesa_callback_data(callback_data, order, contribution=None):
             contribution.save()
         else:
             _fail_payment(order, reason=result_desc)
+        
+        # 🛡️ Task: Notify failure/cancellation to clear UI "Waiting" state
+        try:
+            target_user_id = contribution.user.id if contribution else order.user.id
+            from .tasks import send_lifecycle_notification_task
+            send_lifecycle_notification_task.delay(
+                target_user_id,
+                "Payment Problem",
+                result_desc,
+                {
+                    'type': 'stk_failed',
+                    'order_id': str(order.id),
+                    'reason': result_desc
+                }
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify payment failure: {e}")
+
         return
 
     # ── Shiriki Contribution Logic (overflow-safe) ──

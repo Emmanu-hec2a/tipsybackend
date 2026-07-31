@@ -460,6 +460,20 @@ def trigger_stk_push_task(self, order_id, mpesa_phone, contribution_id=None):
             phone = mpesa.format_phone_number(phone_to_use)
         except ValueError as ve:
             logger.error(f"STK Task Failed: Invalid phone format '{phone_to_use}' - {ve}")
+            
+            # 🛡️ Task: Surface it to the user so it doesn't fail silently
+            if not contribution:
+                order.payment_status = 'failed'
+                order.payment_failure_reason = f"Invalid phone format: {phone_to_use}"
+                order.save(update_fields=['payment_status', 'payment_failure_reason'])
+            
+            target_user_id = contribution.user.id if contribution else order.user.id
+            send_lifecycle_notification_task.delay(
+                target_user_id,
+                "Payment Issue",
+                "We couldn't process that phone number. Please check it and try again.",
+                {'type': 'phone_format_error', 'order_id': str(order.id)}
+            )
             return f"Failed: Invalid Phone Format"
         
         # 🛡️ Fail-Closed Production Guard
@@ -500,6 +514,20 @@ def trigger_stk_push_task(self, order_id, mpesa_phone, contribution_id=None):
         else:
             error_msg = stk_result.get('message', 'M-Pesa service unavailable')
             logger.error(f"STK Task Failed: {error_msg}")
+            
+            # 🛡️ Notify user of the failure so UI doesn't hang
+            target_user_id = contribution.user.id if contribution else order.user.id
+            send_lifecycle_notification_task.delay(
+                target_user_id,
+                "Payment Failed",
+                f"M-Pesa rejected the request: {error_msg}",
+                {
+                    'type': 'stk_failed', 
+                    'order_id': str(order.id),
+                    'error': error_msg
+                }
+            )
+
             if stk_result.get('retryable', False):
                 raise self.retry(countdown=5)
             return f"Failed: {error_msg}"

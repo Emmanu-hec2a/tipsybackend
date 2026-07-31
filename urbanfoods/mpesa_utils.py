@@ -99,15 +99,17 @@ class MpesaIntegration:
         self.stk_push_url = f'{self.base_url}/mpesa/stkpush/v1/processrequest'
         self.stk_query_url = f'{self.base_url}/mpesa/stkpushquery/v1/query'
 
-    def get_access_token(self):
+    def get_access_token(self, force_refresh=False):
         # Cache per-store if needed, but for now global cache with store prefix is safer
         cache_key = f'mpesa_token_{self.shortcode}' if self.shortcode else 'mpesa_access_token'
-        try:
-            token = cache.get(cache_key)
-            if token:
-                return token
-        except Exception as cache_err:
-            logger.warning(f"Cache access failed (Redis down?): {cache_err}")
+        
+        if not force_refresh:
+            try:
+                token = cache.get(cache_key)
+                if token:
+                    return token
+            except Exception as cache_err:
+                logger.warning(f"Cache access failed (Redis down?): {cache_err}")
 
         if not self.consumer_key or not self.consumer_secret:
             logger.error(f"Missing or invalid M-Pesa credentials for store: {self.store}")
@@ -144,7 +146,7 @@ class MpesaIntegration:
         data_to_encode = f"{self.shortcode}{self.passkey}{timestamp}"
         return base64.b64encode(data_to_encode.encode()).decode()
 
-    def initiate_stk_push(self, phone_number, amount, account_reference, transaction_desc):
+    def initiate_stk_push(self, phone_number, amount, account_reference, transaction_desc, _retrying=False):
         access_token = self.get_access_token()
         if not access_token:
             return {'success': False, 'message': 'Authentication failed'}
@@ -184,14 +186,27 @@ class MpesaIntegration:
                 timeout=20
             )
             
-            # 🛡️ DEBUGGING: Capture 400 Bad Request error body
+            # 🛡️ Task: Detect stale token (401) and retry once
+            if response.status_code == 401 or (response.status_code >= 400 and 'invalid' in response.text.lower() and 'token' in response.text.lower()):
+                if not _retrying:
+                    logger.warning(f"STK push for Store {self.store} rejected — possible stale token, clearing cache and retrying once")
+                    self.get_access_token(force_refresh=True)
+                    return self.initiate_stk_push(phone_number, amount, account_reference, transaction_desc, _retrying=True)
+                return {'success': False, 'message': 'M-Pesa authentication failed after retry'}
+
+            # 🛡️ DEBUGGING: Capture other 400+ errors
             if response.status_code >= 400:
                 try:
                     error_data = response.json()
                     logger.error(f"Daraja STK Error {response.status_code}: {error_data}")
+                    
+                    # 🛡️ Task: Notify failure if it's a known non-retryable error
+                    # We can't easily notify user here because we don't have user_id, 
+                    # but we return it to the task which DOES have it.
                     return {
                         "success": False, 
-                        "message": error_data.get('errorMessage', 'M-Pesa rejected the request')
+                        "message": error_data.get('errorMessage', 'M-Pesa rejected the request'),
+                        "error_code": error_data.get('errorCode')
                     }
                 except:
                     logger.error(f"Daraja STK Raw Error {response.status_code}: {response.text}")
