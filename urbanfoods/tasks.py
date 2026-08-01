@@ -579,3 +579,95 @@ def notify_shiriki_progress_task(session_id, contributor_id, amount):
             
     except Exception as e:
         logger.error(f"Error in notify_shiriki_progress_task: {e}")
+
+
+@shared_task
+def send_daily_deals_digest():
+    """
+    Automated Daily Digest of New Promotions.
+    Runs daily at 17:00 EAT.
+    Finds active promotions created in the last 24 hours and notifies nearby users.
+    """
+    from .models import Promotion, Store, SavedAddress
+    from .utils import haversine_distance_km
+    from django.db.models import Count
+
+    # 1. Find active promos created in the last 24 hours
+    yesterday = timezone.now() - timedelta(days=1)
+    new_promos = Promotion.objects.filter(
+        is_active=True,
+        start_date__gte=yesterday,
+        store__isnull=False
+    ).select_related('store')
+
+    if not new_promos.exists():
+        logger.info("Daily Digest: No new promotions found in the last 24 hours.")
+        return "No new promos"
+
+    # 2. Group stores with fresh deals
+    # { store_id: [promo_titles] }
+    promo_stores_map = {}
+    for promo in new_promos:
+        if promo.store.id not in promo_stores_map:
+            promo_stores_map[promo.store.id] = []
+        promo_stores_map[promo.store.id].append(promo.title)
+
+    # 3. Get all users with FCM tokens and their primary addresses
+    # We use .iterator() to handle large user bases efficiently
+    users_with_addresses = User.objects.filter(
+        fcm_token__isnull=False,
+        saved_addresses__isnull=False
+    ).exclude(fcm_token='').prefetch_related('saved_addresses').distinct().iterator(chunk_size=500)
+
+    notification_count = 0
+    
+    # 🛡️ Limit for V1 to prevent massive loops: 15km radius
+    PROXIMITY_RADIUS_KM = 15.0
+
+    for user in users_with_addresses:
+        # Check proximity to any store with a deal
+        nearby_deals = []
+        
+        # Get user's primary/default address (fallback to first)
+        primary_addr = next((a for a in user.saved_addresses.all() if a.is_default), user.saved_addresses.all()[0])
+        
+        if not primary_addr.latitude or not primary_addr.longitude:
+            continue
+
+        for store_id, titles in promo_stores_map.items():
+            store = next(p.store for p in new_promos if p.store.id == store_id)
+            
+            if not store.latitude or not store.longitude:
+                continue
+
+            distance = haversine_distance_km(
+                float(primary_addr.latitude), float(primary_addr.longitude),
+                float(store.latitude), float(store.longitude)
+            )
+
+            if distance <= PROXIMITY_RADIUS_KM:
+                nearby_deals.append({
+                    'store_name': store.name,
+                    'deals': titles
+                })
+
+        # 4. Craft and send personalized notification
+        if nearby_deals:
+            deal_count = len(nearby_deals)
+            if deal_count == 1:
+                title = f"Fresh Deal at {nearby_deals[0]['store_name']}! 🥂"
+                body = f"New offer: {nearby_deals[0]['deals'][0]}. Check it out now!"
+            else:
+                title = "Tipsy Deals of the Day! 🥂"
+                body = f"{deal_count} stores near you have new offers today. Tap to save!"
+
+            send_single_marketing_notification.delay(
+                user.id,
+                title,
+                body,
+                {'type': 'daily_digest', 'deal_count': str(deal_count)}
+            )
+            notification_count += 1
+
+    logger.info(f"Daily Digest: Queued {notification_count} personalized notifications.")
+    return f"Sent {notification_count} notifications"

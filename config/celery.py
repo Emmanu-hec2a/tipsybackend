@@ -18,6 +18,10 @@ app.conf.beat_schedule = {
         'task': 'urbanfoods.tasks.reconcile_pending_mpesa_payments',
         'schedule': 120.0,  # every 2 minutes
     },
+    'daily-deals-digest': {
+        'task': 'urbanfoods.tasks.send_daily_deals_digest',
+        'schedule': crontab(hour=17, minute=0),  # Daily at 5:00 PM EAT
+    },
 }
 
 @app.task(bind=True)
