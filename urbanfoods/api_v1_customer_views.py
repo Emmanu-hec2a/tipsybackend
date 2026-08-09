@@ -128,14 +128,13 @@ class CustomerStoreListView(generics.ListAPIView):
                     longitude__range=(u_lng - lng_deg, u_lng + lng_deg)
                 )
 
-                # Annotate distance for sorting only on the filtered small subset
-                # 🛡️ Hardening: Use FloatField for mathematical operations to avoid precision loss or truncation
+                # Filter by store radius (Strict radius enforcement)
                 queryset = queryset.annotate(
                     distance=ExpressionWrapper(
                         Sqrt(Power(F('latitude') - u_lat, 2) + Power(F('longitude') - u_lng, 2)) * 111.0,
                         output_field=FloatField()
                     )
-                ).order_by('-is_pro', 'distance')
+                ).filter(distance__lte=F('delivery_radius_km')).order_by('-is_pro', 'distance')
             except (ValueError, TypeError):
                 pass
         
