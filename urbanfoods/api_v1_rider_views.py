@@ -90,17 +90,30 @@ class RiderOrderStatusView(APIView):
                 order.rider_verification_method = verification_method
 
             order.delivered_at = timezone.now()
-            # 1. Create earning record
-            RiderEarning.objects.get_or_create(
-                order=order,
-                defaults={
-                    'rider': request.user,
-                    'base_fare': order.rider_base_fare,
-                    'tip': order.tip_amount,
-                    'total': order.rider_base_fare + order.tip_amount
-                }
-            )
-            # 2. Write-back buffered location pings from cache to DB
+            
+            # 🛡️ PRODUCTION HARDENING: Atomic Transaction for Source of Truth
+            from django.db import transaction
+            try:
+                with transaction.atomic():
+                    # 1. Create earning record (The financial source of truth)
+                    RiderEarning.objects.get_or_create(
+                        order=order,
+                        defaults={
+                            'rider': request.user,
+                            'base_fare': order.rider_base_fare,
+                            'tip': order.tip_amount,
+                            'total': order.rider_base_fare + order.tip_amount
+                        }
+                    )
+                    # 2. Update order status permanently
+                    order.save(update_fields=['status', 'delivered_at', 'rider_verified_at', 'rider_verification_method'])
+                    
+                    # 🚀 Real-time Invalidation: Clear earnings cache so rider sees updates instantly
+                    cache.delete(f"rider_earnings_summary_{request.user.id}")
+            except Exception as e:
+                return Response({'error': f'Failed to finalize delivery: {str(e)}'}, status=500)
+
+            # 3. Write-back buffered location pings from cache to DB
             from .models import RiderLocationPing
             path_key = f"order_path_{order.id}"
             buffered_path = cache.get(path_key, [])

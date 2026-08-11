@@ -872,6 +872,44 @@ class RiderSettlementListView(PartnerBaseView, APIView):
         stats = RiderWeeklyStat.objects.filter(store=store).order_by('-week_start')
         return Response(RiderWeeklyStatSerializer(stats, many=True).data)
 
+class LiveRiderEarningsView(PartnerBaseView, APIView):
+    def get(self, request):
+        store = self.get_store(request)
+        if not store:
+            return Response({'error': 'Store context required'}, status=400)
+            
+        today = timezone.localdate()
+        week_start = today - timedelta(days=today.weekday())
+        
+        # Aggregate real-time earnings from individual deliveries this week
+        earnings = RiderEarning.objects.filter(
+            order__store=store,
+            created_at__date__gte=week_start
+        ).values('rider__id', 'rider__first_name', 'rider__last_name', 'rider__username').annotate(
+            base_fare=Sum('base_fare'),
+            tips=Sum('tip'),
+            total=Sum('total'),
+            delivery_count=Count('id')
+        ).order_by('-total')
+        
+        live_data = []
+        for e in earnings:
+            name = f"{e['rider__first_name']} {e['rider__last_name']}".strip()
+            if not name:
+                name = e['rider__username']
+                
+            live_data.append({
+                'rider_id': e['rider__id'],
+                'rider_name': name,
+                'total_base_fare': float(e['base_fare']),
+                'total_tips': float(e['tips']),
+                'total_amount': float(e['total']),
+                'delivery_count': e['delivery_count'],
+                'week_start': week_start
+            })
+            
+        return Response(live_data)
+
 class SettleRiderWeekView(PartnerBaseView, APIView):
     def post(self, request, pk):
         store = self.get_store(request)
@@ -881,10 +919,22 @@ class SettleRiderWeekView(PartnerBaseView, APIView):
         if not mpesa_code:
             return Response({'error': 'M-Pesa reference code is required'}, status=400)
             
-        stat.status = 'paid'
-        stat.mpesa_code = mpesa_code.upper()
-        stat.paid_at = timezone.now()
-        stat.save()
+        # 🛡️ SOURCE OF TRUTH: Prevent double settlement or race conditions
+        from django.db import transaction
+        try:
+            with transaction.atomic():
+                # Refresh from DB to get latest status within transaction
+                stat = RiderWeeklyStat.objects.select_for_update().get(pk=pk, store=store)
+                
+                if stat.status == 'paid':
+                    return Response({'error': 'This week has already been settled'}, status=400)
+                    
+                stat.status = 'paid'
+                stat.mpesa_code = mpesa_code.upper()
+                stat.paid_at = timezone.now()
+                stat.save()
+        except Exception:
+            return Response({'error': 'Settlement failed. Please try again.'}, status=500)
         
         # 🔔 Notify Rider via FCM
         from .tasks import send_lifecycle_notification_task

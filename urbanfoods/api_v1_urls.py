@@ -38,6 +38,7 @@ partner_patterns = [
     path('payments/mpesa/initiate/', api_v1_billing_views.PayNowView.as_view(), name='partner_payments_mpesa_initiate'),
     path('billing/history/', api_v1_billing_views.SubscriptionHistoryView.as_view(), name='partner_billing_history'),
     path('rider-settlements/', api_v1_partner_views.RiderSettlementListView.as_view(), name='partner_rider_settlements'),
+    path('rider-settlements/live/', api_v1_partner_views.LiveRiderEarningsView.as_view(), name='partner_live_rider_earnings'),
     path('rider-settlements/<int:pk>/settle/', api_v1_partner_views.SettleRiderWeekView.as_view(), name='partner_rider_settle'),
 ]
 
