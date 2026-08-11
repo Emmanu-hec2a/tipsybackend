@@ -14,7 +14,7 @@ def get_aes_key():
     key = getattr(settings, 'ENCRYPTION_KEY', os.environ.get('ENCRYPTION_KEY'))
     if not key:
         # Fallback for dev
-        return b'6csUuoMhN7dvrad3XaJ5ApYcFPV2AEFtlwSUEAzoREU='
+        return b'CatoJjLNEnzaaWej5al36G7d22FuJcGYa7FUE2BeADs='
     
     # Ensure it's 32 bytes. If it's a base64 string from Fernet, it might be 32 bytes decoded.
     try:
