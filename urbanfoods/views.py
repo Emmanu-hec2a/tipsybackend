@@ -985,11 +985,33 @@ def process_mpesa_callback_data(callback_data, order, contribution=None):
     result_desc = stk_callback.get('ResultDesc', '')
     checkout_request_id = stk_callback.get('CheckoutRequestID')
 
-    # ── Idempotency guard (cheap early-exit check; real guard is under the lock below) ──
+    # ── Idempotency & Status Guard ──
+    # 1. Skip if already paid (standard idempotency)
     if not contribution and order.payment_status == 'paid':
         return
     if contribution and contribution.status == 'confirmed':
         return
+
+    # 2. Resurrection Logic: If order was cancelled but payment is successful (ResultCode 0)
+    # This handles the race where a late STK PIN entry arrives after a timeout cancellation.
+    if not contribution and result_code == 0 and order.status == 'cancelled':
+        logger.warning(f"Resurrecting cancelled order {order.order_number} due to late successful payment.")
+        order.status = 'pending'
+        order.save(update_fields=['status'])
+        
+        OrderStatusHistory.objects.create(
+            order=order,
+            status='pending',
+            notes="Order resurrected: Late M-Pesa payment received after cancellation."
+        )
+        
+        # Verify stock again to ensure we didn't oversell while cancelled
+        for item in order.items.all():
+            if item.food_item.stock < item.quantity:
+                logger.error(f"Oversell detected during resurrection of {order.order_number}! {item.food_item.name} is OOS.")
+                # We still keep it resurrected but mark for admin review
+                order.status = 'confirmed' # confirmed but requires attention
+                order.save(update_fields=['status'])
 
     # ── Parse callback metadata ──
     metadata = stk_callback.get('CallbackMetadata', {}).get('Item', [])

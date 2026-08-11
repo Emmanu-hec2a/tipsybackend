@@ -429,6 +429,13 @@ def trigger_stk_push_task(self, order_id, mpesa_phone, contribution_id=None):
     Handles both direct orders and Shiriki contributions.
     """
     try:
+        from django.core.cache import cache
+        lock_key = f"stk_push_lock_{order_id}"
+        if cache.get(lock_key):
+            logger.warning(f"STK push already in progress for order {order_id}. Skipping.")
+            return "Locked"
+        cache.set(lock_key, True, timeout=45) # 45s lock to prevent rapid retries
+
         from .models import ShirikiContribution, Order
         
         # Determine target and context
