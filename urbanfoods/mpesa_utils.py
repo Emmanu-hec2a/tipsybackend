@@ -16,12 +16,14 @@ logger = logging.getLogger(__name__)
 # ENCRYPTION UTILS
 # =========================
 def get_encryption_key():
-    """Get encryption key from settings/env. Generates one if missing (NOT FOR PRODUCTION)."""
+    """Get encryption key from settings/env. MUST be set in production."""
     from django.conf import settings
     key = getattr(settings, 'ENCRYPTION_KEY', os.environ.get('ENCRYPTION_KEY'))
     if not key:
-        logger.warning("ENCRYPTION_KEY not found in settings or env. Using fallback key.")
-        return b'6csUuoMhN7dvrad3XaJ5ApYcFPV2AEFtlwSUEAzoREU='
+        raise ValueError(
+            "ENCRYPTION_KEY is not set. This must be configured as an environment variable. "
+            "All M-Pesa credentials are encrypted and cannot be decrypted without it."
+        )
     
     # Ensure it's bytes
     if isinstance(key, str):
@@ -278,3 +280,4 @@ class MpesaIntegration:
             return '254' + phone
         else:
             raise ValueError("Invalid phone number format")
+
