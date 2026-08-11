@@ -31,6 +31,7 @@ urlpatterns = [
     
     # ==================== PUBLIC PAGES ====================
     path('', views.homepage, name='homepage'),
+    path('privacy/', views.privacy_policy_view, name='privacy_policy'),
     path("sitemap.xml", sitemap, {"sitemaps": sitemaps}, name="sitemap"),
     
     # Authentication
