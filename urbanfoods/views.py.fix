@@ -1,0 +1,98 @@
+# FIX for initiate_mpesa_payment function (around line 1330)
+# CRITICAL: Add validation before allowing STK push
+
+@login_required
+@require_http_methods(["POST"])
+def initiate_mpesa_payment(request):
+    """Re-initiate an STK push for an existing unpaid order."""
+    data = json.loads(request.body)
+    order_number = data.get('order_number')
+
+    if not order_number:
+        return JsonResponse({'success': False, 'message': 'Order number required'})
+
+    try:
+        order = Order.objects.get(order_number=order_number, user=request.user)
+    except Order.DoesNotExist:
+        return JsonResponse({'success': False, 'message': 'Order not found'})
+
+    # ─────────────────────────────────────────────────────────────
+    # ✅ CRITICAL VALIDATION: Prevent STK push on non-eligible orders
+    # ─────────────────────────────────────────────────────────────
+    
+    # 1. Reject if order is already cancelled
+    if order.status == 'cancelled':
+        return JsonResponse({
+            'success': False, 
+            'message': 'Cannot pay for cancelled order'
+        })
+    
+    # 2. Reject if payment is already confirmed
+    if order.payment_status == 'paid':
+        return JsonResponse({
+            'success': False, 
+            'message': 'Payment already completed'
+        })
+    
+    # 3. NEW: Reject if STK was recently sent (within last 60 seconds)
+    # Prevents rapid duplicate STK requests that can cause conflicts
+    if order.mpesa_checkout_request_id:
+        from django.utils import timezone
+        last_status_change = order.updated_at
+        seconds_since_last_request = (timezone.now() - last_status_change).total_seconds()
+        
+        if seconds_since_last_request < 60:
+            return JsonResponse({
+                'success': False,
+                'message': f'STK push recently sent. Please wait or enter PIN on your phone.',
+                'retry_after': 60 - int(seconds_since_last_request)
+            })
+    
+    from .mpesa_utils import MpesaIntegration
+    mpesa_service = MpesaIntegration(store=order.store)
+
+    try:
+        formatted_phone = mpesa_service.format_phone_number(order.phone_number)
+    except ValueError as e:
+        return JsonResponse({'success': False, 'message': str(e)})
+
+    stk_result = mpesa_service.initiate_stk_push(
+        phone_number=formatted_phone,
+        amount=int(order.total),
+        account_reference=order.order_number,
+        transaction_desc=f"Order {order.order_number}"
+    )
+
+    # Log initiation
+    log_mpesa_event(
+        event_type="stk_initiated",
+        user_id=request.user.id,
+        order_number=order.order_number,
+        phone=formatted_phone,
+        amount=int(order.total),
+        extra={"checkout_request_id": stk_result.get("checkout_request_id")}
+    )
+
+    if not stk_result.get('success'):
+        return JsonResponse({'success': False, 'message': stk_result.get('message')})
+
+    # ─────────────────────────────────────────────────────────────
+    # ✅ ATOMICALLY update with new CheckoutRequestID
+    # Ensures CheckoutRequestID is always associated with pending order
+    # ─────────────────────────────────────────────────────────────
+    order.mpesa_checkout_request_id = stk_result['checkout_request_id']
+    order.payment_status = 'pending'
+    order.save(update_fields=['mpesa_checkout_request_id', 'payment_status'])
+
+    OrderStatusHistory.objects.create(
+        order=order,
+        status=order.status,
+        notes=f"STK push re-sent to {formatted_phone}",
+    )
+
+    return JsonResponse({
+        'success': True,
+        'message': stk_result.get('customer_message', 'STK push sent'),
+        'checkout_request_id': stk_result['checkout_request_id'],
+    })
+
