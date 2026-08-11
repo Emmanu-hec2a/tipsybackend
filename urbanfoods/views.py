@@ -625,6 +625,10 @@ def robots_txt(request):
     )
     return HttpResponse(content, content_type="text/plain")
 
+def privacy_policy_view(request):
+    """Universal Privacy Policy view for Customers, Riders, and Merchants."""
+    return render(request, 'privacy_policy.html')
+
 
 # ==================== MPESA INTEGRATION ====================
 
