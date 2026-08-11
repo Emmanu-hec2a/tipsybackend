@@ -881,11 +881,17 @@ class LiveRiderEarningsView(PartnerBaseView, APIView):
         today = timezone.localdate()
         week_start = today - timedelta(days=today.weekday())
         
+        logger.info(f"LiveRiderEarningsView: Fetching for store {store.id}, week_start={week_start}")
+        
         # Aggregate real-time earnings from individual deliveries this week
-        earnings = RiderEarning.objects.filter(
+        earnings_qs = RiderEarning.objects.filter(
             order__store=store,
             created_at__date__gte=week_start
-        ).values('rider__id', 'rider__first_name', 'rider__last_name', 'rider__username').annotate(
+        )
+        
+        logger.info(f"LiveRiderEarningsView: Found {earnings_qs.count()} earnings records for this week.")
+        
+        earnings = earnings_qs.values('rider__id', 'rider__first_name', 'rider__last_name', 'rider__username').annotate(
             base_fare=Sum('base_fare'),
             tips=Sum('tip'),
             total=Sum('total'),
@@ -946,3 +952,25 @@ class SettleRiderWeekView(PartnerBaseView, APIView):
         )
         
         return Response({'status': 'success', 'message': 'Settlement recorded successfully'})
+
+class ManualRiderSettlementTriggerView(PartnerBaseView, APIView):
+    def post(self, request):
+        """
+        Manually trigger the weekly settlement calculation for this store.
+        Allows merchants to see payout records before the Sunday 23:59 automated run.
+        """
+        store = self.get_store(request)
+        if not store:
+            return Response({'error': 'Store context required'}, status=400)
+            
+        from .tasks import calculate_rider_weekly_stats
+        result = calculate_rider_weekly_stats()
+        
+        # 🛡️ Cache Invalidation: Clear any potential cached rider stats for this store
+        cache.delete(f"rider_settlements_{store.id}")
+        
+        return Response({
+            'status': 'success', 
+            'message': 'Payout records generated successfully.',
+            'details': result
+        })

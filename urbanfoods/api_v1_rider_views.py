@@ -96,13 +96,16 @@ class RiderOrderStatusView(APIView):
             try:
                 with transaction.atomic():
                     # 1. Create earning record (The financial source of truth)
+                    base_fare = order.rider_base_fare if order.rider_base_fare is not None else Decimal('200.00')
+                    tip = order.tip_amount if order.tip_amount is not None else Decimal('0.00')
+                    
                     RiderEarning.objects.get_or_create(
                         order=order,
                         defaults={
                             'rider': request.user,
-                            'base_fare': order.rider_base_fare,
-                            'tip': order.tip_amount,
-                            'total': order.rider_base_fare + order.tip_amount
+                            'base_fare': base_fare,
+                            'tip': tip,
+                            'total': base_fare + tip
                         }
                     )
                     # 2. Update order status permanently

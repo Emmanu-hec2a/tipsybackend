@@ -39,6 +39,7 @@ partner_patterns = [
     path('billing/history/', api_v1_billing_views.SubscriptionHistoryView.as_view(), name='partner_billing_history'),
     path('rider-settlements/', api_v1_partner_views.RiderSettlementListView.as_view(), name='partner_rider_settlements'),
     path('rider-settlements/live/', api_v1_partner_views.LiveRiderEarningsView.as_view(), name='partner_live_rider_earnings'),
+    path('rider-settlements/trigger/', api_v1_partner_views.ManualRiderSettlementTriggerView.as_view(), name='partner_rider_settlement_trigger'),
     path('rider-settlements/<int:pk>/settle/', api_v1_partner_views.SettleRiderWeekView.as_view(), name='partner_rider_settle'),
 ]
 
