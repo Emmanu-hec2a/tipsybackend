@@ -145,28 +145,14 @@ class StoreAdmin(ModelAdmin):
         ('Branding', {'fields': ('shop_name', 'logo', 'cover_image', 'primary_color', 'secondary_color', 'tagline', 'custom_domain')}),
         ('M-Pesa Daraja Credentials', {
             'fields': ('mpesa_shortcode', 'mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_passkey', 'mpesa_callback_url'),
-            'description': '⚠️ Fields are encrypted on save. Enter plaintext credentials below. They will be encrypted automatically.'
+            'description': 'Credentials will be encrypted automatically on save.'
         }),
         ('Billing', {'fields': ('plan', 'plan_price', 'subscription_active', 'subscription_expires', 'billing_status', 'last_payment_date')}),
     )
     readonly_fields = ('subscription_active',)
 
-    def get_form(self, request, obj=None, **kwargs):
-        """Decrypt credentials when editing (populate form with plaintext)"""
-        form = super().get_form(request, obj, **kwargs)
-        if obj:
-            # Decrypt fields for display in the form
-            for field_name in ['mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_passkey']:
-                encrypted_value = getattr(obj, field_name, None)
-                if encrypted_value:
-                    decrypted = decrypt_value(encrypted_value)
-                    if decrypted:
-                        # Set the initial value to the decrypted plaintext
-                        form.base_fields[field_name].initial = decrypted
-        return form
-
     def save_model(self, request, obj, form, change):
-        """Encrypt credentials on save (convert plaintext to encrypted)"""
+        """Encrypt credentials on save if they're plaintext"""
         for field in ['mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_passkey']:
             val = getattr(obj, field)
             if val and not val.startswith('gAAAA'):
@@ -205,24 +191,12 @@ class PlatformConfigAdmin(ModelAdmin):
     fieldsets = (
         ('M-Pesa Daraja Configuration', {
             'fields': ('daraja_shortcode', 'daraja_consumer_key', 'daraja_consumer_secret', 'daraja_passkey'),
-            'description': '⚠️ Fields are encrypted on save. Enter plaintext credentials. They will be encrypted automatically.'
+            'description': 'Credentials will be encrypted automatically on save.'
         }),
     )
 
-    def get_form(self, request, obj=None, **kwargs):
-        """Decrypt credentials when editing"""
-        form = super().get_form(request, obj, **kwargs)
-        if obj:
-            for field_name in ['daraja_consumer_key', 'daraja_consumer_secret', 'daraja_passkey']:
-                encrypted_value = getattr(obj, field_name, None)
-                if encrypted_value:
-                    decrypted = decrypt_value(encrypted_value)
-                    if decrypted:
-                        form.base_fields[field_name].initial = decrypted
-        return form
-
     def save_model(self, request, obj, form, change):
-        """Encrypt credentials on save"""
+        """Encrypt credentials on save if they're plaintext"""
         for field in ['daraja_consumer_key', 'daraja_consumer_secret', 'daraja_passkey']:
             val = getattr(obj, field)
             if val and not val.startswith('gAAAA'):
