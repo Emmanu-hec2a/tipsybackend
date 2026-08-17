@@ -163,11 +163,16 @@ class PayNowView(PartnerStoreMixin, APIView):
             from .mpesa_utils import MpesaIntegration
             mpesa = MpesaIntegration()
             formatted_phone = mpesa.format_phone_number(phone or store.owner.phone)
+
+            # 🛡️ Fail-Closed Production Guard
+            import os
+            is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
+            stk_amount = int(requested_amount) if is_production else 1
             
             # 1. Create PRE-INITIATED record (Hardens correlation)
             payment = SubscriptionPayment.objects.create(
                 store=store,
-                amount=requested_amount,
+                amount=stk_amount,
                 plan=requested_plan,
                 status='pending',
                 phone_number=formatted_phone,
@@ -175,7 +180,7 @@ class PayNowView(PartnerStoreMixin, APIView):
 
             billing = SubscriptionBilling()
             result = billing.charge_subscription(
-                store, custom_phone=phone, amount=requested_amount
+                store, custom_phone=phone, amount=stk_amount
             )
             
             if result['success']:

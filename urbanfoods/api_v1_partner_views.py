@@ -838,14 +838,19 @@ class RevenueSharingView(PartnerBaseView, APIView):
         # Initiate STK Push
         from .mpesa_utils import MpesaIntegration
         from .billing_utils import SubscriptionBilling
+        import os
         
         mpesa = MpesaIntegration()
         formatted_phone = mpesa.format_phone_number(phone or store.owner.phone)
         
+        # 🛡️ Sandbox Enforcement (1 KES)
+        is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
+        stk_amount = int(stat.partner_share_40) if is_production else 1
+
         # Create Payment Record
         payment = SubscriptionPayment.objects.create(
             store=store,
-            amount=stat.partner_share_40,
+            amount=stk_amount,
             status='pending',
             payment_type='commission',
             week_stat=stat,
@@ -854,7 +859,7 @@ class RevenueSharingView(PartnerBaseView, APIView):
 
         billing = SubscriptionBilling()
         result = billing.charge_subscription(
-            store, custom_phone=phone, amount=stat.partner_share_40
+            store, custom_phone=phone, amount=stk_amount
         )
         
         if result['success']:
