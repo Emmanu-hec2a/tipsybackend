@@ -824,7 +824,7 @@ class RevenueSharingView(PartnerBaseView, APIView):
                 'week_start': current_stat.week_start,
                 'week_end': current_stat.week_end,
                 'total_liquor_sales': float(current_stat.total_liquor_sales),
-                'partner_share': float(h.partner_share_40) if (h := current_stat) else 0, # Safety
+                'partner_share': float(current_stat.partner_share_40),
                 'status': current_stat.status
             },
             'history': history_data
