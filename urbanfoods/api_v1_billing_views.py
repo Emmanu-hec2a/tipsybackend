@@ -251,3 +251,31 @@ class SubscriptionHistoryView(APIView):
             'date': p.created_at.strftime('%Y-%m-%d %H:%M')
         } for p in payments]
         return Response(data)
+
+class DowngradeToFreeView(PartnerStoreMixin, APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        store = self.get_store(request)
+        if not store:
+            return Response({'error': 'No store associated'}, status=400)
+            
+        if store.plan == 'free':
+            return Response({'message': 'Already on Free Tier'}, status=200)
+            
+        # Hard Reset to Free
+        store.plan = 'free'
+        store.plan_price = Decimal('0.00')
+        store.is_pro = False
+        store.billing_status = 'active' # Free tier is always active
+        # Optional: Expire the subscription immediately or let them keep it till month end?
+        # Standard marketplace practice: Downgrade instantly, lose benefits.
+        store.subscription_expires = timezone.now().date()
+        store.save(update_fields=['plan', 'plan_price', 'is_pro', 'billing_status', 'subscription_expires'])
+        
+        logger.info(f"Store {store.id} downgraded to FREE tier manually.")
+        
+        return Response({
+            'success': True,
+            'message': 'Plan downgraded to Free Tier. Your commission is now 10%.'
+        })

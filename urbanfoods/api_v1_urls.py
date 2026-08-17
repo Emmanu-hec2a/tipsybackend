@@ -34,6 +34,7 @@ partner_patterns = [
     path('franchise/switch/', api_v1_partner_views.SwitchActiveStoreView.as_view(), name='partner_franchise_switch'),
     path('franchise/create-branch/', api_v1_partner_views.CreateBranchView.as_view(), name='partner_franchise_create_branch'),
     path('billing/pay-now/', api_v1_billing_views.PayNowView.as_view(), name='partner_billing_pay_now'),
+    path('billing/downgrade/', api_v1_billing_views.DowngradeToFreeView.as_view(), name='partner_billing_downgrade'),
     path('billing/status/', api_v1_billing_views.SubscriptionPaymentStatusView.as_view(), name='partner_billing_status'),
     path('payments/mpesa/initiate/', api_v1_billing_views.PayNowView.as_view(), name='partner_payments_mpesa_initiate'),
     path('billing/history/', api_v1_billing_views.SubscriptionHistoryView.as_view(), name='partner_billing_history'),
