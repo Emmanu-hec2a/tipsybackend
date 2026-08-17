@@ -781,14 +781,20 @@ class RevenueSharingView(PartnerBaseView, APIView):
             defaults={'week_end': week_end}
         )
 
-        # Get history (including current week if not paid)
+        # Get history
         history = WeeklyRevenueStat.objects.filter(
             store=store
         ).order_by('-week_start')
 
         history_data = []
         for h in history:
-            payout = PartnerPayout.objects.filter(week_stat=h).first()
+            # Check for successful STK payments linked to this week
+            payout = SubscriptionPayment.objects.filter(
+                week_stat=h, 
+                status='success',
+                payment_type='commission'
+            ).first()
+            
             history_data.append({
                 'id': h.id,
                 'week_start': h.week_start,
@@ -796,8 +802,8 @@ class RevenueSharingView(PartnerBaseView, APIView):
                 'total_liquor_sales': float(h.total_liquor_sales),
                 'partner_share': float(h.partner_share_40),
                 'status': h.status,
-                'mpesa_code': payout.mpesa_code if payout else None,
-                'paid_at': payout.paid_at if payout else None
+                'mpesa_code': payout.mpesa_receipt if payout else None,
+                'paid_at': payout.created_at if payout else None
             })
 
         return Response({
@@ -813,46 +819,58 @@ class RevenueSharingView(PartnerBaseView, APIView):
         })
 
     def post(self, request):
-        # Mark as paid
+        # INITIATE STK PUSH FOR COMMISSION
         stat_id = request.data.get('stat_id')
-        mpesa_code = request.data.get('mpesa_code')
+        phone = request.data.get('phone')
         
-        if not stat_id or not mpesa_code:
-            return Response({'error': 'Missing stat_id or mpesa_code'}, status=400)
+        if not stat_id:
+            return Response({'error': 'Missing stat_id'}, status=400)
             
         store = self.get_store(request)
         stat = get_object_or_404(WeeklyRevenueStat, id=stat_id, store=store)
         
-        if stat.status != 'unpaid':
-            return Response({'error': f'Cannot pay. Current status is {stat.status}'}, status=400)
-            
-        PartnerPayout.objects.create(
+        if stat.status == 'paid':
+            return Response({'error': 'This week is already paid.'}, status=400)
+        
+        if stat.partner_share_40 <= 0:
+            return Response({'error': 'No commission due for this week.'}, status=400)
+
+        # Initiate STK Push
+        from .mpesa_utils import MpesaIntegration
+        from .billing_utils import SubscriptionBilling
+        
+        mpesa = MpesaIntegration()
+        formatted_phone = mpesa.format_phone_number(phone or store.owner.phone)
+        
+        # Create Payment Record
+        payment = SubscriptionPayment.objects.create(
             store=store,
-            week_stat=stat,
             amount=stat.partner_share_40,
-            mpesa_code=mpesa_code.upper()
+            status='pending',
+            payment_type='commission',
+            week_stat=stat,
+            phone_number=formatted_phone,
+        )
+
+        billing = SubscriptionBilling()
+        result = billing.charge_subscription(
+            store, custom_phone=phone, amount=stat.partner_share_40
         )
         
-        stat.status = 'pending'
-        stat.is_paid = False # Safety
-        stat.save()
+        if result['success']:
+            payment.checkout_request_id = result.get('checkout_request_id')
+            payment.save(update_fields=['checkout_request_id'])
+            
+            return Response({
+                'status': 'pending',
+                'checkout_request_id': payment.checkout_request_id,
+                'message': 'STK Push sent to your phone.'
+            })
         
-        # 🛡️ Notify Admin of new payout to verify
-        msg = (
-            f"💰 <b>New Revenue Payout Submission</b>\n"
-            f"Store: {store.name}\n"
-            f"Amount: KSh {stat.partner_share_40}\n"
-            f"M-Pesa Code: {mpesa_code.upper()}\n"
-            f"Week: {stat.week_start} to {stat.week_end}\n"
-            f"<i>Please verify and approve in Admin panel.</i>"
-        )
-        # Use configured Admin Chat ID or fallback to legacy
-        from django.conf import settings
-        admin_chat_id = getattr(settings, 'TELEGRAM_ADMIN_CHAT_ID', None) or "5191834221"
-        from .tasks import send_telegram_notification_task
-        send_telegram_notification_task.delay(admin_chat_id, msg, bot_type='admin')
-        
-        return Response({'status': 'success', 'message': 'Payment submitted for verification'})
+        payment.status = 'failed'
+        payment.result_desc = result.get('message', 'STK Push initiation failed')
+        payment.save(update_fields=['status', 'result_desc'])
+        return Response({'error': result['message']}, status=400)
 
 class VerifyRevenueGateView(PartnerBaseView, APIView):
     def post(self, request):

@@ -99,6 +99,11 @@ def subscription_callback(request):
                 'plan', 'plan_price', 'is_pro', 'last_payment_date'
             ])
 
+            if payment.payment_type == 'commission' and payment.week_stat:
+                week_stat = payment.week_stat
+                week_stat.status = 'paid'
+                week_stat.save(update_fields=['status'])
+
             payment.status = 'success'
             payment.save()
 

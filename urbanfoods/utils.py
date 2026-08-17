@@ -105,10 +105,24 @@ import logging
 logger = logging.getLogger(__name__)
 
 def format_phone(phone):
-    phone = phone.replace(" ", "")
-    if phone.startswith("0"):
-        phone = "+254" + phone[1:]
-    return phone
+    if not phone:
+        return ""
+    # Strip non-digits using a simpler list comprehension to avoid 'filter' ambiguity
+    digits = "".join([c for c in str(phone) if c.isdigit()])
+    # Strip leading 254 if present
+    if digits.startswith("254"):
+        digits = digits[3:]
+    # Strip the single leading 0 if present
+    if digits.startswith("0"):
+        digits = digits[1:]
+    return digits
+
+def normalize_phone(phone):
+    """
+    Standardized Kenyan phone normalization.
+    Converts '07...', '01...', '+2547...', '+2541...' to a clean 9-digit string.
+    """
+    return format_phone(phone)
 
 
 import firebase_admin
@@ -321,7 +335,11 @@ def send_telegram_message(message, buttons=None, bot_type='admin'):
 
 def update_weekly_revenue_share(order):
     """
-    Calculate 40% of liquor items in an order and update the weekly revenue stats.
+    Calculate commission of liquor items in an order and update the weekly revenue stats.
+    Commission Rate:
+    - Free Plan: 10%
+    - Base Plan: 8%
+    - Pro/Custom: 5% (or store.commission_rate if set)
     Called when an order is marked as 'paid'.
     """
     from .models import WeeklyRevenueStat
@@ -341,20 +359,33 @@ def update_weekly_revenue_share(order):
     if liquor_total <= 0:
         return
 
+    # Determine Commission Rate
+    store = order.store
+    plan = store.effective_plan
+    
+    if store.commission_rate > 0:
+        commission_rate = store.commission_rate / Decimal('100.0')
+    elif plan == 'free':
+        commission_rate = Decimal('0.10')
+    elif plan == 'base':
+        commission_rate = Decimal('0.08')
+    else: # pro, custom
+        commission_rate = Decimal('0.05')
+
     # Get or create current week stat
     today = timezone.localdate()
     week_start = today - timedelta(days=today.weekday())
     week_end = week_start + timedelta(days=6)
 
     stat, created = WeeklyRevenueStat.objects.get_or_create(
-        store=order.store,
+        store=store,
         week_start=week_start,
         defaults={'week_end': week_end}
     )
 
     # Update totals
     stat.total_liquor_sales = Decimal(str(stat.total_liquor_sales)) + liquor_total
-    stat.partner_share_40 = Decimal(str(stat.partner_share_40)) + (liquor_total * Decimal('0.40'))
+    stat.partner_share_40 = Decimal(str(stat.partner_share_40)) + (liquor_total * commission_rate)
     stat.save()
 
 def notify_new_order(order):

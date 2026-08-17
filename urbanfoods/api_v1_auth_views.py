@@ -10,6 +10,7 @@ import random
 import string
 from .models import User, PasswordResetToken
 from .views import get_tokens
+from .utils import normalize_phone
 from django.db import IntegrityError
 import logging
 import firebase_admin
@@ -26,7 +27,8 @@ class UnifiedLoginView(APIView):
         # Try finding user by phone if username is just digits
         user = None
         if username and username.isdigit():
-            user = User.objects.filter(phone=username).first()
+            normalized_username = normalize_phone(username)
+            user = User.objects.filter(phone=normalized_username).first()
             if user:
                 username = user.username
         
@@ -47,7 +49,7 @@ class CustomerSignupView(APIView):
             data = request.data
             email = data.get('email')
             password = data.get('password')
-            phone = str(data.get('phone', ''))
+            phone = normalize_phone(data.get('phone', ''))
             username = data.get('username', email)
             full_name = data.get('full_name', '')
             dob = data.get('dob')
@@ -247,7 +249,7 @@ class LinkSocialPhoneView(APIView):
     Handles 'Account Merging' if the phone already exists.
     """
     def post(self, request):
-        phone = request.data.get('phone')
+        phone = normalize_phone(request.data.get('phone'))
         if not phone:
             return Response({'error': 'Phone number is required'}, status=400)
             
@@ -302,7 +304,7 @@ class RiderSignupView(APIView):
             data = request.data
             email = data.get('email')
             password = data.get('password')
-            phone = str(data.get('phone', ''))
+            phone = normalize_phone(data.get('phone', ''))
             username = data.get('username', email)
             full_name = data.get('full_name', '')
             dob = data.get('dob')

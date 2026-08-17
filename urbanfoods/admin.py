@@ -151,13 +151,6 @@ class StoreAdmin(ModelAdmin):
     )
     readonly_fields = ('subscription_active',)
 
-    def save_model(self, request, obj, form, change):
-        for field in ['mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_passkey']:
-            val = getattr(obj, field)
-            if val and not val.startswith('gAAAA'):
-                setattr(obj, field, encrypt_value(val))
-        super().save_model(request, obj, form, change)
-
 @admin.register(Rating)
 class RatingAdmin(ModelAdmin):
     list_display = ('order', 'customer', 'store', 'store_rating', 'rider_rating', 'created_at')
@@ -185,13 +178,6 @@ class SubscriptionPaymentAdmin(ModelAdmin):
 @admin.register(PlatformConfig)
 class PlatformConfigAdmin(ModelAdmin):
     list_display = ('daraja_shortcode',)
-
-    def save_model(self, request, obj, form, change):
-        for field in ['daraja_consumer_key', 'daraja_consumer_secret', 'daraja_passkey']:
-            val = getattr(obj, field)
-            if val and not val.startswith('gAAAA'):
-                setattr(obj, field, encrypt_value(val))
-        super().save_model(request, obj, form, change)
 
 @admin.register(DeliveryGuy)
 class DeliveryGuyAdmin(ModelAdmin):

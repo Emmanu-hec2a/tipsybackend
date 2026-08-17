@@ -126,8 +126,8 @@ class Store(models.Model):
 
     # Plan / billing
     plan = models.CharField(max_length=20, choices=[
-        ('base', 'Base'), ('pro', 'Pro'), ('custom', 'Custom')], default='base')
-    plan_price = models.DecimalField(max_digits=10, decimal_places=2, default=5000)
+        ('free', 'Free (Pay As You Go)'), ('base', 'Base'), ('pro', 'Pro'), ('custom', 'Custom')], default='free')
+    plan_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     subscription_expires = models.DateField(null=True, blank=True)
     billing_status = models.CharField(max_length=20, choices=[
         ('active', 'Active'), ('grace_period', 'Grace Period'),
@@ -183,6 +183,18 @@ class Store(models.Model):
 
     telegram_chat_id = models.CharField(max_length=100, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        # 🛡️ MIDNIGHT MIRROR: Auto-encrypt sensitive credentials on save
+        # This ensures security regardless of whether data comes from Admin, API, or Shell.
+        from .mpesa_utils import encrypt_value
+        for field in ['mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_passkey']:
+            val = getattr(self, field)
+            # Only encrypt if it's a raw string (doesn't start with Fernet prefix)
+            if val and not str(val).startswith('gAAAA'):
+                setattr(self, field, encrypt_value(val))
+        
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name
@@ -709,6 +721,11 @@ class SubscriptionPayment(models.Model):
         ('success', 'Success'),
         ('failed', 'Failed'),
     ], default='pending')
+    payment_type = models.CharField(max_length=20, choices=[
+        ('subscription', 'Monthly Subscription'),
+        ('commission', 'Pay As You Go Commission'),
+    ], default='subscription')
+    week_stat = models.ForeignKey('WeeklyRevenueStat', on_delete=models.SET_NULL, null=True, blank=True, related_name='payments')
     plan = models.CharField(max_length=20, choices=[
         ('base', 'Base'), ('pro', 'Pro'), ('custom', 'Custom')
     ], null=True, blank=True)
@@ -726,6 +743,14 @@ class PlatformConfig(models.Model):
     daraja_consumer_secret = models.TextField(help_text="Encrypted Consumer Secret")
     daraja_shortcode = models.CharField(max_length=50)
     daraja_passkey = models.TextField(help_text="Encrypted Passkey")
+
+    def save(self, *args, **kwargs):
+        from .mpesa_utils import encrypt_value
+        for field in ['daraja_consumer_key', 'daraja_consumer_secret', 'daraja_passkey']:
+            val = getattr(self, field)
+            if val and not str(val).startswith('gAAAA'):
+                setattr(self, field, encrypt_value(val))
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Platform Config ({self.daraja_shortcode})"

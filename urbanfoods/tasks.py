@@ -226,22 +226,24 @@ def check_expired_shiriki_sessions():
     return f"Processed {count} expired Shiriki sessions"
 
 @shared_task
-def calculate_rider_weekly_stats():
+def calculate_rider_weekly_stats(force_date=None):
     """
     Automated Weekly Payout Calculation.
     Runs every Sunday at 23:59.
-    Aggregates all RiderEarning for the current week and groups them by Rider and Store.
+    Aggregates all RiderEarning for the previous week and groups them by Rider and Store.
     """
     from django.db.models import Sum
     from datetime import date, timedelta
     
-    today = timezone.localdate()
-    # Week start: last Monday
+    # 🛡️ TIMEZONE HARDENING: Use force_date for debugging or manual runs
+    today = force_date or timezone.localdate()
+    
+    # Logic: We want to calculate for the week that JUST ended.
+    # If today is Sunday (weekday 6), week_start is Monday, week_end is Sunday.
     week_start = today - timedelta(days=today.weekday())
-    # Week end: today (Sunday)
     week_end = today
     
-    # Get all earnings for this week
+    logger.info(f"Starting Rider Payout Calculation for range: {week_start} to {week_end}")
     earnings = RiderEarning.objects.filter(
         created_at__date__gte=week_start,
         created_at__date__lte=week_end
@@ -430,9 +432,15 @@ def trigger_stk_push_task(self, order_id, mpesa_phone, contribution_id=None):
     """
     try:
         from django.core.cache import cache
-        lock_key = f"stk_push_lock_{order_id}"
+        # 🛡️ FIX: For Shiriki contributions, use a more granular lock to allow simultaneous pot contributions.
+        # Direct orders still use the order-level lock to prevent double payment.
+        if contribution_id:
+            lock_key = f"stk_push_lock_contrib_{contribution_id}"
+        else:
+            lock_key = f"stk_push_lock_ord_{order_id}"
+
         if cache.get(lock_key):
-            logger.warning(f"STK push already in progress for order {order_id}. Skipping.")
+            logger.warning(f"STK push already in progress for {lock_key}. Skipping.")
             return "Locked"
         cache.set(lock_key, True, timeout=45) # 45s lock to prevent rapid retries
 
@@ -444,8 +452,9 @@ def trigger_stk_push_task(self, order_id, mpesa_phone, contribution_id=None):
             contribution = ShirikiContribution.objects.select_related('session__order', 'user').get(id=contribution_id)
             order = contribution.session.order
             amount_to_charge = contribution.amount
-            account_ref = f"POT-{contribution.session.invite_code}"
-            desc = f"Shiriki Contribution {contribution.session.invite_code}"
+            # 🛡️ FIX: Unique Account Reference to prevent Safaricom from rejecting overlapping pot payments.
+            account_ref = f"POT-{contribution.id}"
+            desc = f"Shiriki Contrib {contribution.session.invite_code}"
         else:
             # Direct Order path
             order = Order.objects.select_related('store', 'user').get(id=order_id)

@@ -154,16 +154,27 @@ class StoreSerializer(serializers.ModelSerializer):
         return normalized
 
     def update(self, instance, validated_data):
-        # Sync the main 'phone' field to the legacy 'phone_number' field for safety
+        # 1. Sync the main 'phone' field to the legacy 'phone_number' field for safety
         phone = validated_data.get('phone')
         if phone:
             instance.phone_number = '0' + phone if not phone.startswith('0') else phone
 
-        # Encrypt M-Pesa credentials before saving
-        for field in ('mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_passkey'):
-            if field in validated_data and validated_data[field]:
-                validated_data[field] = encrypt_value(validated_data[field])
+        # 2. Extract owner data
+        owner_data = validated_data.pop('owner', {})
+        owner = instance.owner
+        if owner:
+            for attr, value in owner_data.items():
+                setattr(owner, attr, value)
+            owner.save()
 
+        # 3. Handle M-Pesa Credentials (Ignore if empty string provided, to prevent clearing)
+        for field in ('mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_passkey'):
+            if field in validated_data and not validated_data[field]:
+                # If merchant sends empty string/null, we KEEP the existing one
+                # unless they specifically want to clear it (but usually it's a UI mistake)
+                validated_data.pop(field)
+
+        # 4. Save store fields (Encryption happens in model.save())
         return super().update(instance, validated_data)
 
     class Meta:
@@ -259,19 +270,6 @@ class StoreSerializer(serializers.ModelSerializer):
             
         return None
 
-    def update(self, instance, validated_data):
-        # Extract owner data (source fields map to 'owner' dict in validated_data if using dots)
-        owner_data = validated_data.pop('owner', {})
-        owner = instance.owner
-        
-        # Update owner fields
-        if owner:
-            for attr, value in owner_data.items():
-                setattr(owner, attr, value)
-            owner.save()
-        
-        # Update store fields
-        return super().update(instance, validated_data)
 
     def to_representation(self, instance):
         """Fallback to owner's info and parent's plan if franchise."""

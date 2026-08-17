@@ -866,17 +866,33 @@ class ShirikiContributeView(APIView):
                 except ShirikiSession.DoesNotExist:
                     return Response({'error': 'Active session not found'}, status=404)
 
-                current_confirmed = session.contributions.filter(
+                # 🛡️ FIX: Calculate 'In-Flight' contributions to prevent overflow.
+                # We subtract both CONFIRMED and RECENT PENDING (less than 2 mins old) contributions.
+                from django.utils import timezone
+                from datetime import timedelta
+                
+                recent_pending_cutoff = timezone.now() - timedelta(minutes=2)
+                
+                # Sum of confirmed payments
+                confirmed_sum = session.contributions.filter(
                     status='confirmed'
                 ).aggregate(Sum('amount_applied_to_pot'))['amount_applied_to_pot__sum'] or Decimal('0')
 
-                remaining = session.order.total - current_confirmed
+                # Sum of pending payments that haven't timed out yet
+                pending_sum = session.contributions.filter(
+                    status='pending',
+                    created_at__gte=recent_pending_cutoff
+                ).aggregate(Sum('amount'))['amount__sum'] or Decimal('0')
+
+                total_reserved = confirmed_sum + pending_sum
+                remaining = session.order.total - total_reserved
 
                 if amount > (remaining + Decimal('0.01')):
                     return Response(
                         {
-                            'error': f'Amount exceeds remaining balance of {remaining}',
-                            'remaining': float(remaining)
+                            'error': f'Amount exceeds remaining available balance of {max(0, float(remaining))}. '
+                                     f'(Note: KSh {float(pending_sum)} is currently reserved by other pending payments).',
+                            'remaining': max(0, float(remaining))
                         }, 
                         status=400
                     )
