@@ -40,16 +40,25 @@ class PartnerStoreMixin:
         3. Validates ownership to prevent cross-tenant access
         """
         store_id = request.headers.get('X-Store-ID')
+        logger.info(f"Resolving store for user {request.user.username} (ID: {request.user.id}). Header X-Store-ID: {store_id}")
         
         try:
-            if store_id:
+            if store_id and store_id != 'default':
                 # Security: Ensure user owns the requested store
-                return Store.objects.get(id=store_id, owner=request.user)
+                store = Store.objects.filter(id=store_id, owner=request.user).first()
+                if store:
+                    return store
             
-            # Fallback to the primary store linked to user
-            # Since owner is now a ForeignKey, we use .stores manager
-            return request.user.stores.first()
-        except (Store.DoesNotExist, AttributeError):
+            # Fallback: Get first store owned by user
+            store = Store.objects.filter(owner=request.user).first()
+            if store:
+                logger.info(f"Fallback resolution: Found store {store.id} for user {request.user.id}")
+                return store
+                
+            logger.warning(f"Store resolution FAILED for user {request.user.id}")
+            return None
+        except Exception as e:
+            logger.error(f"Store resolution error: {str(e)}")
             return None
 
 class PartnerBaseView(PartnerStoreMixin):
@@ -74,6 +83,7 @@ class DashboardStatsView(PartnerBaseView, APIView):
     def get(self, request):
         store = self.get_store(request)
         if not store:
+            logger.error(f"DashboardStatsView: No store found for user {request.user.id}")
             return Response({'error': 'No store associated'}, status=status.HTTP_404_NOT_FOUND)
             
         # 🛡️ Redis Server-Side Caching (5 Minutes)
