@@ -806,13 +806,25 @@ class RevenueSharingView(PartnerBaseView, APIView):
                 'paid_at': payout.created_at if payout else None
             })
 
+        # Determine Commission Rate for UI display
+        plan = store.effective_plan
+        if store.commission_rate > 0:
+            display_rate = float(store.commission_rate)
+        elif plan == 'free':
+            display_rate = 10.0
+        elif plan == 'base':
+            display_rate = 8.0
+        else: # pro, custom
+            display_rate = 5.0
+
         return Response({
+            'commission_rate': display_rate,
             'current_week': {
                 'id': current_stat.id,
                 'week_start': current_stat.week_start,
                 'week_end': current_stat.week_end,
                 'total_liquor_sales': float(current_stat.total_liquor_sales),
-                'partner_share': float(current_stat.partner_share_40),
+                'partner_share': float(h.partner_share_40) if (h := current_stat) else 0, # Safety
                 'status': current_stat.status
             },
             'history': history_data
