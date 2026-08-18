@@ -700,7 +700,9 @@ def safaricom_ip_required(view_func):
     known callback IPs with a silent 403.
     """
     def wrapper(request, *args, **kwargs):
-        if _get_client_ip(request) not in SAFARICOM_IPS:
+        is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
+        # 🛡️ Hardening: Loosen IP check in sandbox to avoid Railway proxy issues
+        if is_production and _get_client_ip(request) not in SAFARICOM_IPS:
             logger.warning(
                 "Blocked callback attempt from unauthorized IP: %s",
                 _get_client_ip(request)

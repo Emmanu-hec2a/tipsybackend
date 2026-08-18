@@ -11,6 +11,7 @@ from .models import Store, SubscriptionPayment, Order
 from .api_v1_partner_views import PartnerStoreMixin
 from .billing_utils import SubscriptionBilling
 from .views import safaricom_ip_required
+from django.views.decorators.csrf import csrf_exempt
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
+@csrf_exempt
 @safaricom_ip_required
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
