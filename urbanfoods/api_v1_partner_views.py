@@ -9,7 +9,7 @@ from django.db.models.functions import TruncDate
 from .models import (
     Order, FoodItem, User, Store, OrderItem, FoodCategory, 
     Promotion, SubscriptionPayment, MarketingBlast, WeeklyRevenueStat, PartnerPayout,
-    RiderWeeklyStat
+    RiderWeeklyStat, RiderEarning
 )
 from .api_v1_serializers import (
     OrderSerializer, FoodItemSerializer, UserSerializer, 
