@@ -435,6 +435,16 @@ class CustomerRetryPaymentView(APIView):
         if order.payment_status == 'paid':
             return Response({'error': 'Payment already completed'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # 🛡️ IDEMPOTENCY GUARD: Prevent duplicate STK pushes within 2 minutes
+        from django.core.cache import cache
+        lock_key = f"stk_push_lock_ord_{order.id}"
+        if cache.get(lock_key):
+            return Response({
+                'error': 'payment_in_progress',
+                'message': 'A payment request is already on your phone. Please check your M-Pesa prompt.',
+                'checkout_request_id': order.mpesa_checkout_request_id
+            }, status=status.HTTP_409_CONFLICT)
+
         from .mpesa_utils import MpesaIntegration
         mpesa = MpesaIntegration(store=order.store)
         try:
