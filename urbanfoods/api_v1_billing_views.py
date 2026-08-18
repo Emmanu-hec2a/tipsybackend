@@ -228,10 +228,10 @@ class SubscriptionHistoryView(APIView):
         payments = SubscriptionPayment.objects.filter(store__owner=user).order_by('-created_at')
         data = [{
             'id': p.id,
-            'amount': p.amount,
+            'amount': str(p.amount),
             'status': p.status,
-            'receipt': p.mpesa_receipt,
-            'date': p.created_at.strftime('%Y-%m-%d %H:%M')
+            'mpesa_receipt': p.mpesa_receipt,
+            'created_at': p.created_at.isoformat()
         } for p in payments]
         return Response(data)
 
