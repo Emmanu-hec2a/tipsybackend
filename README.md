@@ -35,46 +35,45 @@ tipsybackend/
 ├── nixpacks.toml       # Environment & build setup
 └── requirements.txt    # Python dependency management
 ```
-🚀 Local Development Setup
-Prerequisites
-Python 3.10+
+## 🚀 Local Development Setup
 
-PostgreSQL Database
+### Prerequisites
+* Python 3.10+
+* PostgreSQL Database
+* Redis (for Celery background tasks)
 
-Redis (for Celery background tasks)
+### Installation Guide
 
-Installation Guide
-Clone the repository:
+1. **Clone the repository:**
+   ```bash
+   git clone [https://github.com/Emmanu-hec2a/tipsybackend.git](https://github.com/Emmanu-hec2a/tipsybackend.git)
+   cd tipsybackend
+   ```
 
-Bash
-git clone [https://github.com/Emmanu-hec2a/tipsybackend.git](https://github.com/Emmanu-hec2a/tipsybackend.git)
-cd tipsybackend
-Create and activate a virtual environment:
-
-Bash
+## Create and activate a virtual environment:
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-Install dependencies:
 
 Bash
 pip install -r requirements.txt
-Environment Configuration:
+
+## Environment Configuration:
 Create a .env file in the project root directory:
 
-Code snippet
-SECRET_KEY=your_django_secret_key
+```SECRET_KEY=your_django_secret_key
 DEBUG=True
 DATABASE_URL=postgres://user:password@localhost:5432/tipsy_db
 MPESA_CONSUMER_KEY=your_mpesa_key
 MPESA_CONSUMER_SECRET=your_mpesa_secret
-Run Migrations & Start Local Server:
+```
+## Run Migrations & Start Local Server:
 
 Bash
 python manage.py migrate
 python manage.py runserver
 The REST API endpoints will be accessible locally at http://127.0.0.1:8000/.
 
-⚙️ Background Task Workers
+## ⚙️ Background Task Workers
 To process asynchronous queues (such as order status updates and notifications), run the Celery worker and scheduler in separate terminal sessions:
 
 Bash
