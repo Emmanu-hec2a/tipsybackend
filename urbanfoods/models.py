@@ -620,7 +620,7 @@ class InventoryReservation(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=['order', 'food_item'], name='uniq_inventory_reservation_order_item'),
-            models.CheckConstraint(condition=models.Q(quantity__gt=0), name='inventory_reservation_positive_quantity'),
+            models.CheckConstraint(check=models.Q(quantity__gt=0), name='inventory_reservation_positive_quantity'),
         ]
         indexes = [
             models.Index(fields=['status', 'reserved_at'], name='inv_res_status_reserved_idx'),
