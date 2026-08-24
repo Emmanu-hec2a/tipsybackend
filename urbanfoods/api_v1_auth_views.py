@@ -242,9 +242,13 @@ class FirebaseSocialLoginView(APIView):
             
             return Response(res_data)
             
+        except firebase_admin.exceptions.InvalidArgumentError as e:
+            logger.error(f"Firebase token invalid: {e}")
+            return Response({'error': 'Invalid token format or expired'}, status=status.HTTP_401_UNAUTHORIZED)
         except Exception as e:
-            logger.error(f"Firebase social login error: {e}")
-            return Response({'error': 'Invalid social token or verification failed'}, status=status.HTTP_401_UNAUTHORIZED)
+            error_msg = str(e)
+            logger.error(f"Firebase social login error: {error_msg}", exc_info=True)
+            return Response({'error': f'Verification failed: {error_msg}'}, status=status.HTTP_401_UNAUTHORIZED)
 
 class LinkSocialPhoneView(APIView):
     """
