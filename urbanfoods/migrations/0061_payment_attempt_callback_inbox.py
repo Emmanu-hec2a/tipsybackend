@@ -92,15 +92,15 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='paymentattempt',
-            constraint=models.CheckConstraint(condition=models.Q(('order__isnull', False), ('subscription_payment__isnull', False), ('shiriki_contribution__isnull', False), _connector='XOR'), name='payment_attempt_one_target'),
+            constraint=models.CheckConstraint(check=models.Q(('order__isnull', False), ('subscription_payment__isnull', False), ('shiriki_contribution__isnull', False), _connector='XOR'), name='payment_attempt_one_target'),
         ),
         migrations.AddConstraint(
             model_name='paymentattempt',
-            constraint=models.CheckConstraint(condition=models.Q(('expected_amount__gt', 0)), name='payment_attempt_positive_expected_amount'),
+            constraint=models.CheckConstraint(check=models.Q(('expected_amount__gt', 0)), name='payment_attempt_positive_expected_amount'),
         ),
         migrations.AddConstraint(
             model_name='paymentattempt',
-            constraint=models.CheckConstraint(condition=models.Q(('received_amount__isnull', True), ('received_amount__gte', 0), _connector='OR'), name='payment_attempt_nonnegative_received_amount'),
+            constraint=models.CheckConstraint(check=models.Q(('received_amount__isnull', True), ('received_amount__gte', 0), _connector='OR'), name='payment_attempt_nonnegative_received_amount'),
         ),
         migrations.AddIndex(
             model_name='callbackinbox',
