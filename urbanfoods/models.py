@@ -805,7 +805,7 @@ class PaymentAttempt(models.Model):
                 name='uniq_payment_provider_receipt',
             ),
             models.CheckConstraint(
-                condition=(
+                check=(
                     (
                         models.Q(order__isnull=False)
                         & models.Q(subscription_payment__isnull=True)
@@ -825,11 +825,11 @@ class PaymentAttempt(models.Model):
                 name='payment_attempt_one_target',
             ),
             models.CheckConstraint(
-                condition=models.Q(expected_amount__gt=0),
+                check=models.Q(expected_amount__gt=0),
                 name='payment_attempt_positive_expected_amount',
             ),
             models.CheckConstraint(
-                condition=models.Q(received_amount__isnull=True) | models.Q(received_amount__gte=0),
+                check=models.Q(received_amount__isnull=True) | models.Q(received_amount__gte=0),
                 name='payment_attempt_nonnegative_received_amount',
             ),
         ]
