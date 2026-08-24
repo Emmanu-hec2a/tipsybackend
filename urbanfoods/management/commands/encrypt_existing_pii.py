@@ -136,7 +136,7 @@ class Command(BaseCommand):
 
         # Email encryption
         unencrypted_emails = User.objects.exclude(
-            email__startswith='ENCRYPTED:'
+            email_encrypted__startswith='ENCRYPTED:'
         ).exclude(
             email__isnull=True
         ).exclude(
@@ -146,17 +146,41 @@ class Command(BaseCommand):
         email_total = unencrypted_emails.count()
         if email_total > 0:
             self.stdout.write(f'  Found {email_total} users with unencrypted emails')
+            
+            processed = 0
+            for batch_start in range(0, email_total, batch_size):
+                batch = unencrypted_emails[batch_start:batch_start + batch_size]
+                
+                for user in batch:
+                    try:
+                        if user.email:
+                            encrypted_email = EncryptedFieldManager.encrypt_value(
+                                user.email,
+                                'email'
+                            )
+                            user.email_encrypted = encrypted_email
+                        
+                        if not dry_run:
+                            user.save(update_fields=['email_encrypted'])
+                        
+                        processed += 1
+                        
+                        if processed % 100 == 0:
+                            self.stdout.write(f'  ✓ Encrypted {processed} emails')
+                    
+                    except Exception as e:
+                        logger.error(f'Error encrypting user email {user.id}: {e}')
 
     def encrypt_order_data(self, batch_size, dry_run):
-        """Encrypt Order.customer_phone"""
+        """Encrypt Order.phone_number"""
         self.stdout.write('\n📋 Encrypting Order data...')
 
         unencrypted_orders = Order.objects.exclude(
-            customer_phone__startswith='ENCRYPTED:'
+            customer_phone_encrypted__startswith='ENCRYPTED:'
         ).exclude(
-            customer_phone__isnull=True
+            phone_number__isnull=True
         ).exclude(
-            customer_phone=''
+            phone_number=''
         )
 
         total = unencrypted_orders.count()
@@ -171,10 +195,10 @@ class Command(BaseCommand):
                 
                 for order in batch:
                     try:
-                        if order.customer_phone:
+                        if order.phone_number:
                             encrypted_phone = EncryptedFieldManager.encrypt_value(
-                                order.customer_phone,
-                                'customer_phone'
+                                order.phone_number,
+                                'phone_number'
                             )
                             order.customer_phone_encrypted = encrypted_phone
                         
@@ -195,7 +219,7 @@ class Command(BaseCommand):
         self.stdout.write('\n📋 Encrypting PaymentAttempt data...')
 
         unencrypted_attempts = PaymentAttempt.objects.exclude(
-            phone_number__startswith='ENCRYPTED:'
+            phone_number_encrypted__startswith='ENCRYPTED:'
         ).exclude(
             phone_number__isnull=True
         ).exclude(
