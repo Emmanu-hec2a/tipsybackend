@@ -239,6 +239,7 @@ Record the following in the release ticket:
 
 Rollback order if payment behavior fails:
 
+
 1. Stop new production payment traffic if necessary.
 2. Preserve logs, callback inbox records, and payment IDs.
 3. Restore the previous application version and matching secret versions.
