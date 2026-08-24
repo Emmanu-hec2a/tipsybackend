@@ -16,6 +16,6 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='paymentattempt',
-            constraint=models.CheckConstraint(condition=models.Q(models.Q(('order__isnull', False), ('subscription_payment__isnull', True), ('shiriki_contribution__isnull', True)), models.Q(('order__isnull', True), ('subscription_payment__isnull', False), ('shiriki_contribution__isnull', True)), models.Q(('order__isnull', True), ('subscription_payment__isnull', True), ('shiriki_contribution__isnull', False)), _connector='OR'), name='payment_attempt_one_target'),
+            constraint=models.CheckConstraint(check=models.Q(models.Q(('order__isnull', False), ('subscription_payment__isnull', True), ('shiriki_contribution__isnull', True)), models.Q(('order__isnull', True), ('subscription_payment__isnull', False), ('shiriki_contribution__isnull', True)), models.Q(('order__isnull', True), ('subscription_payment__isnull', True), ('shiriki_contribution__isnull', False)), _connector='OR'), name='payment_attempt_one_target'),
         ),
     ]

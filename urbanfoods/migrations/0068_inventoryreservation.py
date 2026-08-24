@@ -25,7 +25,7 @@ class Migration(migrations.Migration):
             ],
             options={
                 'indexes': [models.Index(fields=['status', 'reserved_at'], name='inv_res_status_reserved_idx'), models.Index(fields=['food_item', 'status'], name='inv_res_food_status_idx')],
-                'constraints': [models.UniqueConstraint(fields=('order', 'food_item'), name='uniq_inventory_reservation_order_item'), models.CheckConstraint(condition=models.Q(('quantity__gt', 0)), name='inventory_reservation_positive_quantity')],
+                'constraints': [models.UniqueConstraint(fields=('order', 'food_item'), name='uniq_inventory_reservation_order_item'), models.CheckConstraint(check=models.Q(('quantity__gt', 0)), name='inventory_reservation_positive_quantity')],
             },
         ),
     ]
