@@ -280,7 +280,7 @@ sig = hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
 print(f'Signature: {sig}')
 "
 
-# Use that signature in callback
+# Use that signature in callbac
 curl -X POST \
   -H "X-Forwarded-For: 196.201.214.200" \
   -d "{\"signature\":\"$sig\",\"Body\":...}" \
