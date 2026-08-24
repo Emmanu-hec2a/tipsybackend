@@ -17,7 +17,7 @@ from .api_v1_serializers import (
     SubscriptionPaymentSerializer, OrderItemSerializer,
     RiderWeeklyStatSerializer
 )
-from .permissions import IsPartner, QueryParamJWTAuthentication
+from .permissions import IsPartner, SecureJWTAuthentication
 from .utils import haversine_distance_km
 from .tasks import send_marketing_blast_task
 from datetime import timedelta
@@ -25,6 +25,8 @@ from django.shortcuts import get_object_or_404
 from django.core.cache import cache
 import logging
 import io
+import os
+import secrets
 from django.template.loader import get_template
 from xhtml2pdf import pisa
 from django.http import HttpResponse
@@ -63,7 +65,7 @@ class PartnerStoreMixin:
 
 class PartnerBaseView(PartnerStoreMixin):
     permission_classes = [IsPartner]
-    authentication_classes = [QueryParamJWTAuthentication, authentication.SessionAuthentication]
+    authentication_classes = [SecureJWTAuthentication, authentication.SessionAuthentication]
 
 class PartnerStatusView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -775,6 +777,8 @@ class MarketingStatsView(PartnerBaseView, APIView):
         })
 
 class RevenueSharingView(PartnerBaseView, APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'payment_initiation'
     def get(self, request):
         store = self.get_store(request)
         if not store:
@@ -859,7 +863,7 @@ class RevenueSharingView(PartnerBaseView, APIView):
 
         # Initiate STK Push
         from .mpesa_utils import MpesaIntegration
-        from .billing_utils import SubscriptionBilling
+        from .payment_initiation import InitiatePaymentService, PaymentInitiationConflict
         import os
         
         mpesa = MpesaIntegration()
@@ -869,20 +873,29 @@ class RevenueSharingView(PartnerBaseView, APIView):
         is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
         stk_amount = int(stat.partner_share_40) if is_production else 1
 
-        # Create Payment Record
-        payment = SubscriptionPayment.objects.create(
-            store=store,
-            amount=stk_amount,
-            status='pending',
-            payment_type='commission',
-            week_stat=stat,
-            phone_number=formatted_phone,
-        )
-
-        billing = SubscriptionBilling()
-        result = billing.charge_subscription(
-            store, custom_phone=phone, amount=stk_amount
-        )
+        key = request.headers.get('Idempotency-Key') or request.data.get('idempotency_key')
+        payment = SubscriptionPayment.objects.filter(payment_idempotency_key=key).first() if key else None
+        if payment:
+            if payment.store_id != store.id or payment.payment_type != 'commission' or payment.week_stat_id != stat.id:
+                return Response({'error': 'Idempotency key is already used for another payment.'}, status=409)
+        else:
+            payment = SubscriptionPayment.objects.create(
+                store=store,
+                amount=stk_amount,
+                status='pending',
+                payment_type='commission',
+                week_stat=stat,
+                phone_number=formatted_phone,
+                payment_idempotency_key=key,
+            )
+        attempt, _ = InitiatePaymentService.create_or_get_for_subscription(payment, formatted_phone, key)
+        return Response({
+            'status': attempt.status,
+            'payment_id': str(attempt.public_payment_id),
+            'checkout_request_id': attempt.checkout_request_id,
+            'idempotency_key': attempt.idempotency_key,
+            'is_async': True,
+        })
         
         if result['success']:
             payment.checkout_request_id = result.get('checkout_request_id')
@@ -903,7 +916,8 @@ class VerifyRevenueGateView(PartnerBaseView, APIView):
     def post(self, request):
         password = request.data.get('password')
         # Default security gate password for V1
-        if password == "TipsyPartner2026":
+        configured_password = os.environ.get('REVENUE_GATE_PASSWORD', '')
+        if configured_password and secrets.compare_digest(str(password or ''), configured_password):
             return Response({'success': True})
         return Response({'success': False}, status=401)
 

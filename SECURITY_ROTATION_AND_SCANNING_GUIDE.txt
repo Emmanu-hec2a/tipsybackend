@@ -1,0 +1,261 @@
+TipsyTheoryy Security Rotation and Scanning Guide
+==================================================
+
+Purpose
+-------
+This guide covers the Phase 11 operational work that cannot be completed by
+source-code changes alone: rotating secrets, updating Railway services,
+validating HTTPS/proxy configuration, and running security scans.
+
+Do this during a controlled maintenance window. Keep the previous values in a
+secure password manager until the deployment and payment smoke tests pass.
+Never put secrets in Git, a ticket, terminal transcripts, screenshots, or chat.
+
+1. Prepare and back up
+----------------------
+
+1. Confirm the current Railway deployment is healthy.
+2. Export a database backup/snapshot from Railway PostgreSQL.
+3. Record the current values in a secure password manager, not a local text
+   file. You need the old `SECRET_KEY` for rollback and the old
+   `ENCRYPTION_KEY` to re-encrypt existing M-Pesa credentials.
+4. Confirm the callback URL configured in Daraja and Railway is the production
+   HTTPS URL, for example:
+
+   https://api.tipsytheoryy.com/api/v1/billing/callback/
+
+5. Tell support and operations that existing JWT access tokens will be
+   invalidated when `SECRET_KEY` changes.
+
+2. Generate replacement secrets
+--------------------------------
+
+Run these commands on an administrator workstation. Do not commit the output.
+
+PowerShell:
+
+  python -c "import secrets; print(secrets.token_urlsafe(64))"
+
+Use the output as the new `SECRET_KEY`. This rotates Django sessions, JWT
+signing, password-reset signing, and other Django-signed values.
+
+Generate a Fernet key:
+
+  python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+Use the output as the new `ENCRYPTION_KEY`. Do not replace this value yet;
+follow the encryption-key migration in section 4 first.
+
+Generate the revenue-gate password:
+
+  python -c "import secrets; print(secrets.token_urlsafe(32))"
+
+Use a separate generated value for `REVENUE_GATE_PASSWORD`.
+
+Do not generate M-Pesa credentials locally. Rotate the Safaricom Daraja
+consumer key, consumer secret, passkey, shortcode/till credentials, and any
+callback credentials through the approved Safaricom/business account process.
+
+3. Configure Railway variables
+------------------------------
+
+In the Railway project, update variables through the dashboard or an approved
+secrets workflow. Do not pass secrets in a shell command if your shell history
+is retained.
+
+Required/important variables:
+
+  DEBUG=False
+  SECRET_KEY=<new generated value>
+  ENCRYPTION_KEY=<new Fernet value, after section 4>
+  ALLOWED_HOSTS=api.tipsytheoryy.com,tipsybackend.up.railway.app
+  TRUSTED_PROXY_IPS=<the immediate Railway proxy IP/range approved for this service>
+  REVENUE_GATE_PASSWORD=<new generated value>
+  MPESA_CONSUMER_KEY=<rotated Daraja value>
+  MPESA_CONSUMER_SECRET=<rotated Daraja value>
+  MPESA_PASSKEY=<rotated Daraja value>
+  MPESA_SHORTCODE=<approved production shortcode>
+  MPESA_CALLBACK_URL=https://api.tipsytheoryy.com/api/v1/billing/callback/
+  MPESA_PRODUCTION=True
+
+The exact `TRUSTED_PROXY_IPS` value must come from the Railway/network
+configuration. Do not guess it. If it is wrong, callback source validation may
+reject legitimate callbacks; if it is too broad, it weakens the trust boundary.
+
+Update every service that imports Django settings:
+
+  - Web service
+  - Celery worker
+  - Celery beat
+
+The PostgreSQL and Redis services do not need application secret variables,
+but verify that their connection variables remain unchanged. Deploy/restart
+the web, worker, and beat services after variables are updated.
+
+4. Rotate ENCRYPTION_KEY without losing M-Pesa credentials
+-----------------------------------------------------------
+
+Do not simply replace `ENCRYPTION_KEY`. Existing Store and PlatformConfig
+credentials are encrypted with the old key and will become unreadable.
+
+Required procedure:
+
+1. Take a fresh PostgreSQL backup.
+2. Keep the old key configured while starting a one-off maintenance process.
+3. Load all encrypted Store fields and PlatformConfig fields with the old key.
+4. Decrypt them in memory only.
+5. Set the new key for the same process.
+6. Save each object with the decrypted values. The model save methods encrypt
+   them using the new key.
+7. Verify that every credential decrypts with the new key and that no records
+   were skipped.
+8. Only then set the new `ENCRYPTION_KEY` in Railway and restart all services.
+
+The encrypted fields are:
+
+  Store.mpesa_consumer_key
+  Store.mpesa_consumer_secret
+  Store.mpesa_passkey
+  PlatformConfig.daraja_consumer_key
+  PlatformConfig.daraja_consumer_secret
+  PlatformConfig.daraja_passkey
+
+Run this as a reviewed one-off Django maintenance script. The script must:
+
+  - Read `OLD_ENCRYPTION_KEY` and `NEW_ENCRYPTION_KEY` from the process
+    environment.
+  - Import `Store`, `PlatformConfig`, `decrypt_value`, and Django settings.
+  - Set `settings.ENCRYPTION_KEY` to the old key while decrypting.
+  - Keep decrypted values in memory; never write them to a file or log them.
+  - Set `settings.ENCRYPTION_KEY` to the new key before calling `save()`.
+  - Use a transaction and abort on the first decryption failure.
+  - Print only record IDs/counts, never credentials.
+
+If the application does not yet have a reviewed key-migration command, do not
+perform an ad-hoc production shell edit. Add and review a dedicated management
+command, run it against a backup/clone first, then run it once in production.
+
+5. Rotate Safaricom credentials
+--------------------------------
+
+1. Create/retrieve the replacement Daraja credentials through Safaricom.
+2. Confirm the new shortcode, passkey, callback URL, and production app are
+   approved for the production environment.
+3. Update Railway platform variables and any encrypted Store/PlatformConfig
+   records through the supported admin process.
+4. Restart web and Celery services.
+5. Execute one low-value controlled STK test.
+6. Verify the callback, `PaymentAttempt`, receipt, and ledger/outbox effects.
+7. Revoke the old Daraja credentials only after the controlled test passes.
+
+6. Rotate SECRET_KEY and application passwords
+-----------------------------------------------
+
+1. Set the new `SECRET_KEY` and `REVENUE_GATE_PASSWORD` in Railway.
+2. Restart web, worker, and beat together so all processes use the same values.
+3. Expect all old JWT access/refresh tokens and sessions to stop working.
+4. Sign in again from the Flutter app and merchant panel.
+5. Verify password reset and revenue-gate flows.
+6. Revoke the old secret/password in the password manager after rollback
+   confidence is no longer needed.
+
+7. Run Django deployment checks
+-------------------------------
+
+From the backend project with production-like variables loaded:
+
+  python manage.py check --deploy
+  python manage.py check
+  python manage.py migrate --plan
+
+Expected security results include no wildcard hosts, secure cookie warnings
+resolved, HTTPS settings enabled, and no missing production secret settings.
+
+8. Run dependency and source security scans
+--------------------------------------------
+
+Create an isolated scanning environment where possible:
+
+  python -m venv .security-venv
+  .\.security-venv\Scripts\Activate.ps1
+  python -m pip install --upgrade pip pip-audit bandit detect-secrets
+
+Python dependency scan:
+
+  pip-audit -r requirements.txt
+
+Static Python scan:
+
+  bandit -r config urbanfoods -ll
+
+Secret scan of tracked files:
+
+  detect-secrets scan --all-files --exclude-files "(^|/)(node_modules|dist|.git)/" > secrets-baseline.json
+  detect-secrets audit secrets-baseline.json
+
+Review every finding. Do not blindly baseline a real secret. If a real secret
+is found, rotate it first, remove it from Git history where necessary, and
+re-run the scan.
+
+Merchant dependency scan:
+
+  cd C:\Users\PC\Desktop\tipsytheoryy_merchant
+  npm audit --omit=dev
+  npm audit
+  npm run lint
+  npm run build
+
+Optional repository scan if approved tooling is available:
+
+  trufflehog filesystem C:\Users\PC\Desktop\tipsytheoryy --results=verified
+
+9. Callback and payment smoke tests
+------------------------------------
+
+After deployment, verify:
+
+  - HTTPS redirects HTTP traffic.
+  - A request from an untrusted callback source receives 403.
+  - A legitimate Safaricom callback is accepted.
+  - A duplicate callback creates no duplicate financial effect.
+  - Merchant payment status cannot be read using another store's payment ID.
+  - Customer payment status cannot be read using another customer's payment ID.
+  - Payment initiation is throttled after the configured limit.
+  - Double-click/retry returns the same payment attempt.
+  - A delayed callback updates Flutter and the merchant panel without reload.
+  - M-Pesa credentials are never present in logs.
+
+10. Evidence and rollback
+--------------------------
+
+Record the following in the release ticket:
+
+  - Rotation timestamp and operator.
+  - Secret version identifiers, never secret values.
+  - Database backup identifier.
+  - Railway deployment IDs for web, worker, and beat.
+  - Scan commands, tool versions, findings, and approvals.
+  - Payment smoke-test payment IDs and receipts, with sensitive fields redacted.
+
+Rollback order if payment behavior fails:
+
+1. Stop new production payment traffic if necessary.
+2. Preserve logs, callback inbox records, and payment IDs.
+3. Restore the previous application version and matching secret versions.
+4. Do not roll back the database after payment records have been written unless
+   the rollback has been explicitly reviewed for financial consistency.
+5. Reconcile all in-flight attempts before resuming traffic.
+
+Completion criteria
+-------------------
+
+Phase 11 is operationally complete only when all of the following are true:
+
+  - All secrets were rotated and old values revoked.
+  - ENCRYPTION_KEY migration was verified without credential loss.
+  - Railway web/worker/beat use identical required security variables.
+  - Django deploy checks pass.
+  - Dependency, secret, SAST, and optional DAST scans are reviewed.
+  - HTTPS/proxy/callback tests pass.
+  - Payment ownership and throttling tests pass.
+  - Rollback evidence and support escalation contacts are recorded.

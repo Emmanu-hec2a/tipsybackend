@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.throttling import ScopedRateThrottle
 from django.contrib.auth import authenticate
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
@@ -20,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 class UnifiedLoginView(APIView):
     permission_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'auth_login'
     def post(self, request):
         username = request.data.get('username')
         password = request.data.get('password')

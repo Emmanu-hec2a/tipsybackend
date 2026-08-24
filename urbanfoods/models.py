@@ -54,8 +54,66 @@ class User(AbstractUser):
     favourite_stores = models.ManyToManyField('Store', blank=True, related_name='favourited_by')
     wallet_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
     
+    # 🛡️ PCI DSS: Encrypted PII Fields (Phase 2 Day 4)
+    # Stored as ENCRYPTED:v1:... format, transparent encryption/decryption via EncryptedFieldManager
+    phone_number_encrypted = models.TextField(
+        null=True,
+        blank=True,
+        help_text='🛡️ Encrypted phone number (ENCRYPTED: prefix). Read via EncryptedFieldManager.'
+    )
+    email_encrypted = models.TextField(
+        null=True,
+        blank=True,
+        help_text='🛡️ Encrypted email (ENCRYPTED: prefix). Read via EncryptedFieldManager.'
+    )
+    
     def __str__(self):
         return self.username
+
+
+class WalletLedger(models.Model):
+    """Append-only wallet movements; User.wallet_balance is the materialized balance."""
+
+    class EntryType(models.TextChoices):
+        CREDIT = 'credit', 'Credit'
+        DEBIT = 'debit', 'Debit'
+        REFUND = 'refund', 'Refund'
+        REVERSAL = 'reversal', 'Reversal'
+
+    user = models.ForeignKey(User, on_delete=models.PROTECT, related_name='wallet_ledger')
+    entry_type = models.CharField(max_length=20, choices=EntryType.choices)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    reference_type = models.CharField(max_length=50)
+    reference_id = models.CharField(max_length=100)
+    idempotency_key = models.CharField(max_length=160, unique=True)
+    balance_before = models.DecimalField(max_digits=12, decimal_places=2)
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [models.Index(fields=['user', 'created_at'], name='wallet_user_created_idx')]
+
+
+class LoyaltyLedger(models.Model):
+    """Append-only loyalty movements; User.loyalty_points is the materialized balance."""
+
+    class EntryType(models.TextChoices):
+        CREDIT = 'credit', 'Credit'
+        DEBIT = 'debit', 'Debit'
+        REFUND = 'refund', 'Refund'
+        REVERSAL = 'reversal', 'Reversal'
+
+    user = models.ForeignKey(User, on_delete=models.PROTECT, related_name='loyalty_ledger')
+    entry_type = models.CharField(max_length=20, choices=EntryType.choices)
+    points = models.IntegerField()
+    source_payment_id = models.CharField(max_length=100, blank=True)
+    idempotency_key = models.CharField(max_length=160, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [models.Index(fields=['user', 'created_at'], name='loyalty_user_created_idx')]
 
 class HighRiskZone(models.Model):
     """Geofenced high-risk zones like schools, universities, or high-incident areas."""
@@ -435,6 +493,12 @@ class Order(models.Model):
     hostel = models.CharField(max_length=100, null=True, blank=True)
     room_number = models.CharField(max_length=50, null=True, blank=True)
     phone_number = models.CharField(max_length=15)
+    # 🛡️ PCI DSS: Encrypted customer phone (Phase 2 Day 4)
+    customer_phone_encrypted = models.TextField(
+        null=True,
+        blank=True,
+        help_text='🛡️ Encrypted customer phone (ENCRYPTED: prefix). Read via EncryptedFieldManager.'
+    )
     delivery_notes = models.TextField(blank=True)
     
     # Pricing
@@ -459,6 +523,9 @@ class Order(models.Model):
     ], blank=True, null=True)
     payment_completed_at = models.DateTimeField(null=True, blank=True)
     payment_failure_reason = models.TextField(blank=True, null=True)
+    payment_idempotency_key = models.CharField(max_length=128, unique=True, null=True, blank=True, db_index=True)
+    idempotency_fingerprint = models.CharField(max_length=64, null=True, blank=True, editable=False)
+    revenue_share_applied_at = models.DateTimeField(null=True, blank=True)
 
     # Store type for the order
     store_type = models.CharField(max_length=10, choices=[
@@ -495,18 +562,11 @@ class Order(models.Model):
             self.order_number = f"TT{timezone.localtime(timezone.now()).strftime('%Y%m%d')}{uuid.uuid4().hex[:6].upper()}"
         super().save(*args, **kwargs)
 
-        # Handle inventory deduction on delivery
+        # Reservations decrement stock at order creation. Delivery only
+        # finalizes them; it must not deduct stock a second time.
         if old_status != 'delivered' and self.status == 'delivered':
-            for item in self.items.all():
-                food_item = item.food_item
-                if food_item.stock >= item.quantity:
-                    food_item.stock -= item.quantity
-                else:
-                    food_item.stock = 0
-                
-                # Update popularity
-                food_item.times_ordered += item.quantity
-                food_item.save(update_fields=['stock', 'times_ordered'])
+            from .inventory_service import InventoryReservationService
+            InventoryReservationService.finalize_order(self.pk)
     
     def __str__(self):
         return f"Order {self.order_number} - {self.user.username}"
@@ -524,6 +584,48 @@ class OrderItem(models.Model):
     
     def __str__(self):
         return f"{self.quantity}x {self.food_item.name} (Order: {self.order.order_number})"
+
+
+class PromotionRedemption(models.Model):
+    """One auditable, idempotent promotion use attached to an order."""
+
+    promotion = models.ForeignKey('Promotion', on_delete=models.PROTECT, related_name='redemptions')
+    order = models.OneToOneField(Order, on_delete=models.PROTECT, related_name='promotion_redemption')
+    code = models.CharField(max_length=20)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['promotion', 'order'], name='uniq_promotion_order_redemption'),
+        ]
+
+
+class InventoryReservation(models.Model):
+    """Auditable stock reservation owned by an order."""
+
+    class Status(models.TextChoices):
+        RESERVED = 'reserved', 'Reserved'
+        RELEASED = 'released', 'Released'
+        FINALIZED = 'finalized', 'Finalized'
+
+    order = models.ForeignKey(Order, on_delete=models.PROTECT, related_name='inventory_reservations')
+    food_item = models.ForeignKey(FoodItem, on_delete=models.PROTECT, related_name='inventory_reservations')
+    quantity = models.PositiveIntegerField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.RESERVED, db_index=True)
+    reserved_at = models.DateTimeField(auto_now_add=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+    finalized_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['order', 'food_item'], name='uniq_inventory_reservation_order_item'),
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name='inventory_reservation_positive_quantity'),
+        ]
+        indexes = [
+            models.Index(fields=['status', 'reserved_at'], name='inv_res_status_reserved_idx'),
+            models.Index(fields=['food_item', 'status'], name='inv_res_food_status_idx'),
+        ]
 
 class OrderStatusHistory(models.Model):
     """Track order status changes"""
@@ -572,6 +674,10 @@ class Promotion(models.Model):
     
     class Meta:
         unique_together = ['store', 'code']
+        indexes = [
+            models.Index(fields=['store', 'code', 'is_active'], name='promo_store_code_active_idx'),
+            models.Index(fields=['store', 'is_active', 'start_date', 'end_date'], name='promo_store_active_dates_idx'),
+        ]
     
     def __str__(self):
         return self.title
@@ -607,6 +713,242 @@ class MpesaTransaction(models.Model):
 
     def __str__(self):
         return f"{self.mpesa_receipt_number or 'PENDING'} - {self.order.order_number}"
+
+
+class PaymentAttempt(models.Model):
+    """Durable identity and audit record for one provider payment attempt."""
+
+    class Provider(models.TextChoices):
+        MPESA = 'mpesa', 'M-Pesa'
+
+    class PaymentType(models.TextChoices):
+        ORDER = 'order', 'Order'
+        SUBSCRIPTION = 'subscription', 'Subscription'
+        SHIRIKI = 'shiriki', 'Shiriki Contribution'
+        COMMISSION = 'commission', 'Commission'
+
+    class Status(models.TextChoices):
+        INITIATING = 'initiating', 'Initiating'
+        PENDING = 'pending', 'Pending'
+        CONFIRMED = 'confirmed', 'Confirmed'
+        FAILED = 'failed', 'Failed'
+        EXPIRED = 'expired', 'Expired'
+        MANUAL_REVIEW = 'manual_review', 'Manual Review'
+        OVERPAID = 'overpaid', 'Overpaid'
+        REFUND_REQUIRED = 'refund_required', 'Refund Required'
+
+    public_payment_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    provider = models.CharField(max_length=20, choices=Provider.choices, default=Provider.MPESA)
+    payment_type = models.CharField(max_length=20, choices=PaymentType.choices)
+
+    order = models.ForeignKey(
+        'Order', on_delete=models.PROTECT, null=True, blank=True,
+        related_name='payment_attempts'
+    )
+    subscription_payment = models.ForeignKey(
+        'SubscriptionPayment', on_delete=models.PROTECT, null=True, blank=True,
+        related_name='payment_attempts'
+    )
+    shiriki_contribution = models.ForeignKey(
+        'ShirikiContribution', on_delete=models.PROTECT, null=True, blank=True,
+        related_name='payment_attempts'
+    )
+
+    idempotency_key = models.CharField(max_length=128, unique=True, null=True, blank=True)
+    checkout_request_id = models.CharField(max_length=100, null=True, blank=True)
+    provider_receipt = models.CharField(max_length=50, null=True, blank=True)
+
+    expected_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    received_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    currency = models.CharField(max_length=3, default='KES')
+    phone_number = models.CharField(max_length=15, blank=True)
+    # 🛡️ PCI DSS: Encrypted M-Pesa phone (Phase 2 Day 4)
+    phone_number_encrypted = models.TextField(
+        null=True,
+        blank=True,
+        help_text='🛡️ Encrypted M-Pesa phone (ENCRYPTED: prefix). Read via EncryptedFieldManager.'
+    )
+
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.INITIATING, db_index=True)
+    provider_result_code = models.IntegerField(null=True, blank=True)
+    provider_result_description = models.TextField(blank=True)
+    failure_code = models.CharField(max_length=50, blank=True)
+    failure_message = models.TextField(blank=True)
+
+    raw_initiation_response = models.JSONField(null=True, blank=True)
+    raw_callback_payload = models.JSONField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    initiation_started_at = models.DateTimeField(null=True, blank=True)
+    initiation_completed_at = models.DateTimeField(null=True, blank=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    failed_at = models.DateTimeField(null=True, blank=True)
+    expired_at = models.DateTimeField(null=True, blank=True)
+    last_reconciled_at = models.DateTimeField(null=True, blank=True)
+    reconciliation_started_at = models.DateTimeField(null=True, blank=True)
+    next_reconciliation_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    reconciliation_attempts = models.PositiveIntegerField(default=0)
+    manual_review_reason = models.TextField(blank=True)
+    processing_attempts = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['provider', 'checkout_request_id'],
+                condition=models.Q(checkout_request_id__isnull=False),
+                name='uniq_payment_provider_checkout',
+            ),
+            models.UniqueConstraint(
+                fields=['provider', 'provider_receipt'],
+                condition=models.Q(provider_receipt__isnull=False),
+                name='uniq_payment_provider_receipt',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    (
+                        models.Q(order__isnull=False)
+                        & models.Q(subscription_payment__isnull=True)
+                        & models.Q(shiriki_contribution__isnull=True)
+                    )
+                    | (
+                        models.Q(order__isnull=True)
+                        & models.Q(subscription_payment__isnull=False)
+                        & models.Q(shiriki_contribution__isnull=True)
+                    )
+                    | (
+                        models.Q(order__isnull=True)
+                        & models.Q(subscription_payment__isnull=True)
+                        & models.Q(shiriki_contribution__isnull=False)
+                    )
+                ),
+                name='payment_attempt_one_target',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(expected_amount__gt=0),
+                name='payment_attempt_positive_expected_amount',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(received_amount__isnull=True) | models.Q(received_amount__gte=0),
+                name='payment_attempt_nonnegative_received_amount',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['status', 'created_at'], name='payment_status_created_idx'),
+            models.Index(fields=['payment_type', 'status'], name='payment_type_status_idx'),
+            models.Index(fields=['order', 'status'], name='payment_order_status_idx'),
+            models.Index(fields=['status', 'checkout_request_id'], name='payment_status_checkout_idx'),
+            models.Index(fields=['status', 'next_reconciliation_at'], name='payment_status_next_recon_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.public_payment_id} - {self.status}"
+
+
+class CallbackInbox(models.Model):
+    """Durable provider callback inbox processed independently from HTTP receipt."""
+
+    class Provider(models.TextChoices):
+        MPESA = 'mpesa', 'M-Pesa'
+
+    class Status(models.TextChoices):
+        RECEIVED = 'received', 'Received'
+        PROCESSING = 'processing', 'Processing'
+        PROCESSED = 'processed', 'Processed'
+        RETRY = 'retry', 'Retry'
+        UNMATCHED = 'unmatched', 'Unmatched'
+        MANUAL_REVIEW = 'manual_review', 'Manual Review'
+
+    event_hash = models.CharField(max_length=64, unique=True)
+    provider = models.CharField(max_length=20, choices=Provider.choices, default=Provider.MPESA)
+    checkout_request_id = models.CharField(max_length=100, blank=True, db_index=True)
+    payment_attempt = models.ForeignKey(
+        PaymentAttempt, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='callback_events'
+    )
+    raw_payload = models.JSONField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.RECEIVED, db_index=True)
+    processing_attempts = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True)
+    received_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    processing_started_at = models.DateTimeField(null=True, blank=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['received_at']
+        indexes = [
+            models.Index(fields=['status', 'received_at'], name='callback_status_received_idx'),
+            models.Index(fields=['provider', 'checkout_request_id'], name='callback_provider_checkout_idx'),
+            models.Index(fields=['status', 'next_attempt_at'], name='callback_status_next_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.provider}:{self.event_hash} - {self.status}"
+
+
+class PaymentReconciliation(models.Model):
+    """Immutable audit record for each provider status query."""
+
+    class Status(models.TextChoices):
+        CONFIRMED = 'confirmed', 'Confirmed'
+        FAILED = 'failed', 'Failed'
+        PENDING = 'pending', 'Pending'
+        ERROR = 'error', 'Error'
+        MANUAL_REVIEW = 'manual_review', 'Manual Review'
+
+    payment_attempt = models.ForeignKey(PaymentAttempt, on_delete=models.PROTECT, related_name='reconciliations')
+    attempt_number = models.PositiveIntegerField()
+    status = models.CharField(max_length=20, choices=Status.choices)
+    result_code = models.IntegerField(null=True, blank=True)
+    result_description = models.TextField(blank=True)
+    raw_response = models.JSONField(null=True, blank=True)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [models.UniqueConstraint(
+            fields=['payment_attempt', 'attempt_number'],
+            name='uniq_reconciliation_attempt_number',
+        )]
+        indexes = [models.Index(fields=['payment_attempt', 'created_at'], name='recon_attempt_created_idx')]
+
+
+class OutboxEvent(models.Model):
+    """Transactional event record for reliable downstream processing."""
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        PROCESSING = 'processing', 'Processing'
+        PROCESSED = 'processed', 'Processed'
+        RETRY = 'retry', 'Retry'
+        DEAD = 'dead', 'Dead Letter'
+
+    event_type = models.CharField(max_length=80)
+    aggregate_type = models.CharField(max_length=50)
+    aggregate_id = models.CharField(max_length=100)
+    payment_attempt = models.ForeignKey(
+        PaymentAttempt, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='outbox_events'
+    )
+    payload = models.JSONField(default=dict)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True)
+    idempotency_key = models.CharField(max_length=180, unique=True)
+    attempts = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['created_at']
+        constraints = [models.UniqueConstraint(
+            fields=['event_type', 'aggregate_type', 'aggregate_id'],
+            name='uniq_outbox_event_aggregate',
+        )]
+        indexes = [models.Index(fields=['status', 'next_attempt_at'], name='outbox_status_next_idx')]
 
 class DeliveryGuy(models.Model):
     """Legacy Delivery personnel for orders"""
@@ -736,6 +1078,7 @@ class SubscriptionPayment(models.Model):
     transaction_date = models.CharField(max_length=20, blank=True)
     mpesa_receipt = models.CharField(max_length=50, null=True, blank=True)
     raw_callback = models.JSONField(null=True, blank=True)
+    payment_idempotency_key = models.CharField(max_length=128, unique=True, null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
 class PlatformConfig(models.Model):
@@ -811,6 +1154,11 @@ class ShirikiSession(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['status', 'expires_at'], name='shiriki_sess_status_exp_idx'),
+        ]
+
     def __str__(self):
         return f"Shiriki {self.invite_code} - {self.order.order_number}"
 
@@ -831,6 +1179,12 @@ class ShirikiContribution(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     amount_applied_to_pot = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     wallet_credit_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    payment_idempotency_key = models.CharField(max_length=128, unique=True, null=True, blank=True, db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['session', 'status', 'created_at'], name='shiriki_contrib_state_idx'),
+        ]
 
     def __str__(self):
         return f"{self.user.username} - {self.amount} for {self.session.invite_code}"
@@ -871,3 +1225,140 @@ class PanicAlert(models.Model):
 
     def __str__(self):
         return f"PANIC: {self.rider.username} at {self.timestamp}"
+
+
+# 🛡️ PCI DSS: Fraud Detection & Incident Tracking (Phase 2 Day 5)
+class FraudIncident(models.Model):
+    """
+    Tracks fraudulent payment patterns detected by FraudDetectionEngine.
+    Provides audit trail for investigation and post-incident analysis.
+    
+    Severity scores:
+    - 0.75-0.89: High confidence fraud (auto-blocked, investigation required)
+    - 0.90-1.00: Critical fraud (escalate to authorities)
+    """
+    
+    class PatternType(models.TextChoices):
+        FAILED_VELOCITY = 'failed_velocity', 'Failed Attempt Velocity'
+        UNUSUAL_AMOUNT = 'unusual_amount', 'Unusual Amount'
+        TEST_TRANSACTIONS = 'test_transactions', 'Test Transactions'
+        ORDER_VELOCITY = 'order_velocity', 'Order Velocity'
+        GEOGRAPHIC_ANOMALY = 'geographic_anomaly', 'Geographic Anomaly'
+        RATE_LIMIT_BYPASS = 'rate_limit_bypass', 'Rate Limit Bypass'
+        CALLBACK_MANIPULATION = 'callback_manipulation', 'Callback Manipulation'
+    
+    class Severity(models.TextChoices):
+        LOW = 'low', 'Low'
+        MEDIUM = 'medium', 'Medium'
+        HIGH = 'high', 'High'
+        CRITICAL = 'critical', 'Critical'
+    
+    class Status(models.TextChoices):
+        OPEN = 'open', 'Open'
+        INVESTIGATING = 'investigating', 'Investigating'
+        ESCALATED = 'escalated', 'Escalated to Authorities'
+        RESOLVED = 'resolved', 'Resolved'
+        FALSE_POSITIVE = 'false_positive', 'False Positive'
+    
+    # Unique ID & Classification
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    pattern_type = models.CharField(
+        max_length=30,
+        choices=PatternType.choices,
+        db_index=True
+    )
+    confidence = models.FloatField(
+        help_text='Confidence score (0.0-1.0). Auto-blocked at 75%+ confidence.',
+        db_index=True
+    )
+    severity = models.CharField(
+        max_length=20,
+        choices=Severity.choices,
+        db_index=True
+    )
+    
+    # Affected Entity
+    customer = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='fraud_incidents',
+        help_text='Customer associated with fraud pattern'
+    )
+    phone_number = models.CharField(
+        max_length=15,
+        help_text='Phone number used in fraudulent attempt'
+    )
+    
+    # Status & Investigation
+    status = models.CharField(
+        max_length=30,
+        choices=Status.choices,
+        default=Status.OPEN,
+        db_index=True
+    )
+    details = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Pattern-specific details (e.g., attempt count, amount, IP, timestamp)'
+    )
+    
+    # Related Payment
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='fraud_incidents',
+        help_text='Order associated with fraud (if applicable)'
+    )
+    
+    # Investigation & Assignment
+    assigned_to = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_fraud_incidents',
+        limit_choices_to={'role': User.Role.SUPERADMIN},
+        help_text='Security team member investigating this incident'
+    )
+    investigation_notes = models.TextField(
+        blank=True,
+        help_text='Investigation findings and actions taken'
+    )
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['customer', 'status'], name='fraud_customer_status_idx'),
+            models.Index(fields=['created_at', 'severity'], name='fraud_time_severity_idx'),
+            models.Index(fields=['pattern_type', 'confidence'], name='fraud_pattern_confidence_idx'),
+        ]
+    
+    def __str__(self):
+        return f"[{self.severity.upper()}] {self.pattern_type} - {self.customer.username} ({self.status})"
+    
+    def mark_as_investigating(self, assigned_to, reason=''):
+        """Mark incident as being investigated."""
+        self.status = self.Status.INVESTIGATING
+        self.assigned_to = assigned_to
+        if reason:
+            self.investigation_notes = f"Reason: {reason}\n{self.investigation_notes}"
+        self.save()
+    
+    def resolve(self, outcome, notes=''):
+        """Resolve incident with outcome (RESOLVED or FALSE_POSITIVE)."""
+        if outcome not in [self.Status.RESOLVED, self.Status.FALSE_POSITIVE]:
+            raise ValueError(f"Invalid outcome: {outcome}")
+        self.status = outcome
+        self.resolved_at = timezone.now()
+        if notes:
+            self.investigation_notes = f"{self.investigation_notes}\n\nResolution: {notes}"
+        self.save()

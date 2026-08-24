@@ -1,0 +1,209 @@
+TipsyTheoryy Phase 15 Controlled Production Launch Runbook
+==========================================================
+
+Purpose
+-------
+Move TipsyTheoryy from certified staging to production through an allowlisted
+merchant/customer cohort with read-only observability first, measurable gates,
+and an executable rollback plan.
+
+This runbook does not authorize a general-availability launch. Phase 14 must
+be certified and signed off before production payment traffic is enabled.
+
+Launch prerequisites
+--------------------
+
+Required approvals:
+
+  - Phase 14 staging certification passed.
+  - Engineering owner approval.
+  - Safaricom/payment operations approval.
+  - Support/on-call coverage confirmed.
+  - Database backup and rollback owner assigned.
+  - Security secret rotation completed.
+  - Phase 10 API compatibility rollout completed.
+
+Required evidence:
+
+  - PostgreSQL concurrency tests passed without skips.
+  - Redis/Celery failure injection passed.
+  - Callback loss/reconciliation recovery passed.
+  - Flutter and merchant restart tests passed.
+  - Dashboards and alerts tested.
+  - Rollback drill passed.
+
+Go/no-go rule
+-------------
+
+Do not proceed if any prerequisite is missing, if payment records are not
+reconciled, if callback backlog is non-zero without an owner, or if support
+cannot respond to manual-review/refund cases.
+
+T-24 hours: freeze and prepare
+------------------------------
+
+1. Freeze payment-related merges and record the exact release commit SHA.
+2. Confirm Phase 14 evidence and approvals are attached to the release record.
+3. Confirm production PostgreSQL backup/snapshot and restore owner.
+4. Confirm Railway web, worker, beat, PostgreSQL, and Redis services are healthy.
+5. Confirm production secrets are rotated and present in all Django services.
+6. Confirm `DEBUG=False`, explicit `ALLOWED_HOSTS`, HTTPS, and
+   `TRUSTED_PROXY_IPS`.
+7. Confirm Safaricom production callback URL and credentials.
+8. Confirm no pending staging payment or test data can reach production.
+9. Confirm incident channel, support contact, and escalation schedule.
+
+T-1 hour: deploy safely
+-----------------------
+
+1. Put the merchant/customer payment entry points behind the launch flag or
+   allowlist. Keep the allowlist empty until the migration check passes.
+2. Deploy application code to the production web service.
+3. Run migrations once against production PostgreSQL:
+
+     python manage.py migrate --noinput
+
+4. Verify:
+
+     python manage.py check --deploy
+     python manage.py showmigrations urbanfoods
+
+5. Start/restart web, Celery worker, and Celery beat with the same release and
+   environment variables.
+6. Verify Celery:
+
+     celery -A config.celery inspect ping
+     celery -A config.celery inspect registered
+
+7. Confirm beat schedules for reconciliation and outbox dispatch.
+8. Confirm callback endpoint returns the expected response through HTTPS.
+9. Do not perform a real payment until observability baseline is captured.
+
+T+0: read-only observability
+----------------------------
+
+1. Query `GET /api/v1/ops/payment-metrics/` with the operator credential.
+2. Record pending payment count, callback backlog, outbox backlog, manual
+   review count, reconciliation count, and confirmation latency baseline.
+3. Confirm Railway logs contain redacted payment lifecycle events.
+4. Confirm alerts deliver to the on-call destination.
+5. Keep payment initiation disabled while this baseline is reviewed.
+
+T+15 minutes: internal cohort
+-----------------------------
+
+1. Enable one internal/allowlisted merchant and a small customer cohort.
+2. Process one controlled low-value payment.
+3. Verify end to end:
+
+   - One PaymentAttempt.
+   - One provider checkout request.
+   - One callback/reconciliation result.
+   - One receipt.
+   - Correct order/subscription effect.
+   - Correct ledger/loyalty/wallet effect.
+   - One outbox event with successful processing.
+
+4. Confirm Flutter and merchant clients display the authoritative final state.
+5. Observe for at least the agreed stability window before expanding.
+
+Cohort expansion gates
+----------------------
+
+Expand only when all gates remain true for the observation window:
+
+  - No duplicate financial effects.
+  - No lost callbacks.
+  - No unauthorized payment status access.
+  - Payment confirmation failure rate is within the approved threshold.
+  - p95 confirmation latency is within the approved threshold.
+  - Pending payment age is within SLA.
+  - Callback and outbox backlogs are stable or declining.
+  - No Redis, Celery, or database error spike.
+  - Support has no unresolved payment incident.
+
+Suggested cohorts:
+
+  1. Internal operators.
+  2. One allowlisted merchant and selected customers.
+  3. Five percent of eligible merchants.
+  4. Twenty-five percent after an observation window.
+  5. Fifty percent after a second observation window.
+  6. Full traffic only after explicit GA approval.
+
+Monitoring cadence
+------------------
+
+During the controlled launch, review every 15-30 minutes:
+
+  - Payment initiation total/failure total.
+  - Callback received/processing/unmatched totals.
+  - Confirmation/failure/manual-review totals.
+  - Duplicate initiation and duplicate callback counts.
+  - Confirmation latency average/p95.
+  - Pending payment count and oldest age.
+  - Callback inbox backlog.
+  - Reconciliation and outbox backlog/dead letters.
+  - PostgreSQL locks/errors.
+  - Redis/Celery health.
+  - Customer/merchant support reports.
+
+Immediate stop conditions
+-------------------------
+
+Stop cohort expansion and disable new payment initiation if any occurs:
+
+  - Any confirmed duplicate charge effect.
+  - Any payment confirmed without a valid provider signal.
+  - Any lost callback that reconciliation cannot recover.
+  - Incorrect wallet, loyalty, ledger, or subscription effect.
+  - Unauthorized cross-customer or cross-store payment status access.
+  - Callback/outbox backlog grows continuously.
+  - Reconciliation repeatedly fails or manual-review volume spikes.
+  - Redis/Celery/database outage affects payment correctness.
+  - Provider timeout or failure rate exceeds the approved threshold.
+  - Rollback or support escalation cannot be executed.
+
+Rollback procedure
+------------------
+
+1. Disable new payment initiation for the active cohort.
+2. Keep callback ingestion and reconciliation available if they are healthy.
+3. Preserve PaymentAttempt, CallbackInbox, OutboxEvent, logs, and metrics.
+4. Capture the incident timestamp, release SHA, payment IDs, and provider
+   checkout IDs.
+5. Decide whether application rollback is safe with the current database
+   schema. Do not roll back the database after financial writes without review.
+6. Roll back application services only if the previous version understands all
+   records already written.
+7. Reconcile every pending attempt before resuming traffic.
+8. Manually review any amount mismatch, overpayment, failed reversal, or
+   refund-required case. Automated refunds/reversals are not currently enabled.
+9. Obtain engineering and payment-operations approval before re-enabling a
+   cohort.
+
+Post-launch review
+------------------
+
+Within 24 hours, record:
+
+  - Cohort size and transaction count.
+  - Success/failure/pending/manual-review rates.
+  - Confirmation latency.
+  - Callback/reconciliation/outbox behavior.
+  - Incidents and support cases.
+  - Rollback readiness.
+  - Decision to expand, hold, or revert.
+
+Phase 15 exit criteria
+----------------------
+
+Phase 15 is complete only after:
+
+  - Controlled cohort launch succeeded.
+  - All monitoring and alert gates remained healthy.
+  - No critical payment correctness incident occurred.
+  - Rollback was available and evidence was retained.
+  - Expansion decision was approved.
+
+General availability remains a separate Phase 16 approval.

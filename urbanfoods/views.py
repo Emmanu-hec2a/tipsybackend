@@ -26,7 +26,7 @@ from rest_framework import status, authentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework_simplejwt.tokens import RefreshToken
-from .permissions import IsCustomer, IsPartner, IsRider, IsSuperAdmin, QueryParamJWTAuthentication
+from .permissions import IsCustomer, IsPartner, IsRider, IsSuperAdmin, SecureJWTAuthentication
 from rest_framework.decorators import api_view
 import requests
 import os
@@ -687,11 +687,13 @@ SAFARICOM_IPS = {
 
 
 def _get_client_ip(request):
-    """Return the real client IP, respecting X-Forwarded-For from trusted proxies."""
+    """Return the client IP only when the immediate proxy is explicitly trusted."""
+    trusted_proxy_ips = getattr(settings, 'TRUSTED_PROXY_IPS', set())
+    remote_addr = request.META.get('REMOTE_ADDR', '')
     forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if forwarded_for:
+    if forwarded_for and remote_addr in trusted_proxy_ips:
         return forwarded_for.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR', '')
+    return remote_addr
 
 
 def safaricom_ip_required(view_func):
@@ -877,18 +879,10 @@ def place_order(request):
                 )
 
                 # ── Initiate STK push ──
-                stk_response = mpesa_service.initiate_stk_push(
-                    phone_number=formatted_phone,
-                    amount=int(total),
-                    account_reference=order.order_number,
-                    transaction_desc="Tipsy Theoryy Order"
+                from .payment_initiation import InitiatePaymentService
+                attempt, _ = InitiatePaymentService.create_or_get_for_order(
+                    order, formatted_phone, request.headers.get('Idempotency-Key')
                 )
-
-                if not stk_response.get('success'):
-                    raise Exception(stk_response.get('message') or 'STK push failed')
-
-                order.mpesa_checkout_request_id = stk_response.get('checkout_request_id')
-                order.save(update_fields=['mpesa_checkout_request_id'])
 
         except Exception as e:
             logger.exception("M-Pesa STK push failed for user %s", request.user.id)
@@ -897,8 +891,10 @@ def place_order(request):
                 'message': f'Payment initiation failed: {e}',
             })
 
+        stk_response = {'customer_message': 'Payment processing started. Please check your phone for the M-Pesa prompt.'}
         return JsonResponse({
             'success': True,
+            'message': 'Payment processing started. Please check your phone for the M-Pesa prompt.',
             'message': stk_response.get('customer_message', 'STK push sent — check your phone'),
             'order_number': order.order_number,
             'checkout_request_id': order.mpesa_checkout_request_id,
@@ -986,6 +982,22 @@ def process_mpesa_callback_data(callback_data, order, contribution=None):
     from retry_unmatched_callback_task() when the match was delayed, and
     from reconcile_pending_mpesa_payments() when the real callback never arrives.
     """
+    # Compatibility wrapper: all payment signals now use the authoritative
+    # PaymentAttempt transaction service. The legacy implementation below is
+    # retained temporarily for source compatibility and is unreachable.
+    stk_callback = callback_data.get('Body', {}).get('stkCallback', {})
+    raw_metadata = stk_callback.get('CallbackMetadata', {}).get('Item', [])
+    metadata = {item.get('Name'): item.get('Value') for item in raw_metadata}
+    from .payment_service import ConfirmPaymentService
+    return ConfirmPaymentService.process_payment_signal(
+        checkout_request_id=stk_callback.get('CheckoutRequestID'),
+        result_code=stk_callback.get('ResultCode'),
+        result_desc=stk_callback.get('ResultDesc', ''),
+        metadata=metadata,
+        source='legacy_callback_wrapper',
+    )
+
+    # Deprecated implementation retained temporarily for migration history.
     stk_callback = callback_data.get('Body', {}).get('stkCallback', {})
     result_code = stk_callback.get('ResultCode')
     result_desc = stk_callback.get('ResultDesc', '')
@@ -1214,33 +1226,80 @@ def process_mpesa_callback_data(callback_data, order, contribution=None):
 @safaricom_ip_required
 @require_http_methods(["POST"])
 def mpesa_callback(request):
+    """
+    🛡️ M-Pesa Callback Handler with Complete Security Validation (Day 3)
+    
+    Security Checks:
+    1. IP Whitelist: Callback from Safaricom-owned IP only
+    2. HMAC Signature: Callback signature matches expected HMAC
+    3. Timestamp Validation: Callback within 5 minutes (prevents replay)
+    4. Idempotency: Same callback (same CheckoutRequestID) not processed twice
+    5. Business Logic: Amount, phone, status all validated
+    
+    Failure Handling:
+    - Log all validation failures with violation_type for fraud detection
+    - Return 200 OK anyway (to prevent callback retry storms)
+    - Separate error handling path (don't mark payment as failed on validation error)
+    """
+    from .callback_validation import validate_payment_callback
+    
     try:
+        # Extract client IP
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            client_ip = x_forwarded_for.split(',')[0].strip()
+        else:
+            client_ip = request.META.get('REMOTE_ADDR', 'unknown')
+        
         callback_data = json.loads(request.body)
         stk_callback = callback_data.get('Body', {}).get('stkCallback', {})
         checkout_request_id = stk_callback.get('CheckoutRequestID')
 
         if not checkout_request_id:
+            logger.warning("Callback missing CheckoutRequestID", extra={"client_ip": client_ip})
             return HttpResponse("OK")
 
-        try:
-            order = Order.objects.select_related('user').get(
-                mpesa_checkout_request_id=checkout_request_id
+        # ═══════════════════════════════════════════════════════════════
+        # 🛡️ SECURITY: Validate Callback Source & Integrity
+        # ═══════════════════════════════════════════════════════════════
+        is_valid, error_msg, error_code = validate_payment_callback(
+            payload=callback_data,
+            client_ip=client_ip,
+        )
+        
+        if not is_valid:
+            logger.error(
+                f"Callback validation failed: {error_msg}",
+                extra={
+                    "client_ip": client_ip,
+                    "checkout_request_id": checkout_request_id,
+                    "error_code": error_code,
+                    "error_message": error_msg,
+                    "violation_type": "callback_validation_failed"
+                }
             )
-            contribution = None
-        except Order.DoesNotExist:
-            try:
-                contribution = ShirikiContribution.objects.select_related(
-                    'session__order', 'user'
-                ).get(checkout_request_id=checkout_request_id)
-                order = contribution.session.order
-            except ShirikiContribution.DoesNotExist:
-                retry_unmatched_callback_task.delay(callback_data, attempt=1)
-                logger.warning(
-                    "Callback unmatched, queued for retry: %s", checkout_request_id
-                )
-                return HttpResponse("OK")
+            # Return 200 OK to prevent callback retry storms
+            # But don't process the payment
+            return HttpResponse("OK")
 
-        process_mpesa_callback_data(callback_data, order, contribution)
+        # Extract metadata into a clean dictionary
+        raw_metadata = stk_callback.get('CallbackMetadata', {}).get('Item', [])
+        metadata = {item.get('Name'): item.get('Value') for item in raw_metadata}
+        
+        from .payment_service import ConfirmPaymentService
+        success = ConfirmPaymentService.process_payment_signal(
+            checkout_request_id=checkout_request_id,
+            result_code=int(stk_callback.get('ResultCode', -1)),
+            result_desc=stk_callback.get('ResultDesc', ''),
+            metadata=metadata,
+            source='callback',
+            client_ip=client_ip  # 🛡️ Include IP for audit trail
+        )
+        
+        if not success:
+            # Unmatched/Early Callback - queue for retry
+            from .tasks import retry_unmatched_callback_task
+            retry_unmatched_callback_task.delay(callback_data, attempt=1)
 
     except Exception:
         logger.exception("Unhandled error in mpesa_callback")
@@ -1264,64 +1323,46 @@ def mpesa_stk_query(request):
     if not checkout_request_id:
         return JsonResponse({'success': False, 'message': 'checkout_request_id required'})
 
-    # ── Guard: only allow the order owner to query ──
-    try:
-        order = Order.objects.select_related('user').get(
-            mpesa_checkout_request_id=checkout_request_id,
-            user=request.user,          # prevents other users querying someone else's order
-        )
-    except Order.DoesNotExist:
-        return JsonResponse({'success': False, 'message': 'Order not found'})
-
-    # ── Idempotency: already done via callback ──
-    if order.payment_status == 'paid':
-        return JsonResponse({
-            'success': True,
-            'result_code': 0,
-            'result_desc': 'Payment already confirmed',
-            'payment_status': 'paid',
-        })
-
-    # ── Ask Safaricom ──
+    # 🛡️ ASK SAFARICOM (Unified Logic Path)
     from .mpesa_utils import MpesaIntegration
-    mpesa_service = MpesaIntegration(store=order.store)
-    result = mpesa_service.query_stk_status(checkout_request_id)
+    from .payment_service import ConfirmPaymentService
+    
+    # We find the order/contribution just to get the store for credentials
+    try:
+        # Check Order then Contribution
+        match = Order.objects.filter(mpesa_checkout_request_id=checkout_request_id).first() or \
+                ShirikiContribution.objects.filter(checkout_request_id=checkout_request_id).first()
+        store = match.store if hasattr(match, 'store') else (match.session.order.store if hasattr(match, 'session') else None)
+    except:
+        return JsonResponse({'success': False, 'message': 'Payment record not found'})
 
-    # Log structured
-    log_mpesa_event(
-        event_type="stk_query",
-        user_id=order.user.id,
-        order_number=order.order_number,
-        phone=order.phone_number,
-        amount=order.total,
-        extra={"checkout_request_id": checkout_request_id, "result": result}
-    )
+    mpesa_service = MpesaIntegration(store=store)
+    result = mpesa_service.query_stk_status(checkout_request_id)
 
     if not result.get('success'):
         return JsonResponse(result)
 
-    result_code = result.get('result_code')
+    # Use the unified service to handle the result
+    ConfirmPaymentService.process_payment_signal(
+        checkout_request_id=checkout_request_id,
+        result_code=result.get('result_code'),
+        result_desc=result.get('result_desc'),
+        metadata=result.get('metadata', {}),
+        source='stk_query'
+    )
 
-    if result_code == 0:
-        # Payment successful — reuse shared helper
-        with transaction.atomic():
-            _confirm_payment(
-                order,
-                notes='Payment confirmed via STK query',
-            )
-        result['payment_status'] = 'paid'
+    # Re-fetch the status to return to frontend
+    try:
+        if hasattr(match, 'session'): # Shiriki
+            updated_status = ShirikiContribution.objects.get(id=match.id).status
+            payment_status = 'paid' if updated_status == 'confirmed' else ('failed' if updated_status == 'failed' else 'pending')
+        else: # Standard Order
+            updated_order = Order.objects.get(id=match.id)
+            payment_status = updated_order.payment_status
+    except:
+        payment_status = 'pending'
 
-    elif result_code in [1, 1032, 1037]:
-        # 1    = Insufficient funds
-        # 1032 = Request cancelled by user
-        # 1037 = DS timeout (user never responded)
-        _fail_payment(order, reason=result.get('result_desc', 'Payment failed'))
-        result['payment_status'] = 'failed'
-
-    else:
-        # Still pending — tell the frontend to keep polling
-        result['payment_status'] = 'pending'
-
+    result['payment_status'] = payment_status
     return JsonResponse(result)
 
 
@@ -1379,12 +1420,15 @@ def initiate_mpesa_payment(request):
     except ValueError as e:
         return JsonResponse({'success': False, 'message': str(e)})
 
-    stk_result = mpesa_service.initiate_stk_push(
-        phone_number=formatted_phone,
-        amount=int(order.total),
-        account_reference=order.order_number,
-        transaction_desc=f"Order {order.order_number}"
+    from .payment_initiation import InitiatePaymentService
+    attempt, _ = InitiatePaymentService.create_or_get_for_order(
+        order, formatted_phone, request.headers.get('Idempotency-Key')
     )
+    stk_result = {
+        'success': True,
+        'checkout_request_id': attempt.checkout_request_id,
+        'customer_message': 'Payment processing started.',
+    }
 
     # Log initiation
     log_mpesa_event(
@@ -1568,7 +1612,7 @@ class TestSuperAdminView(APIView):
 
 class OrderVerificationImageView(APIView):
     permission_classes = [IsAuthenticated]
-    authentication_classes = [QueryParamJWTAuthentication, authentication.SessionAuthentication]
+    authentication_classes = [SecureJWTAuthentication, authentication.SessionAuthentication]
 
     def get(self, request, order_number):
         from .models import Order

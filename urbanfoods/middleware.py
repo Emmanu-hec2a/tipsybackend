@@ -2,6 +2,46 @@
 from django.conf import settings
 from importlib import import_module
 from .models import Store
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class RateLimitHeadersMiddleware:
+    """
+    🛡️ Adds rate limit headers to all API responses.
+    
+    Headers added (if rate limiting occurred):
+    - X-RateLimit-Limit: Max requests allowed
+    - X-RateLimit-Remaining: Requests remaining
+    - X-RateLimit-Reset: Unix timestamp when limit resets
+    - Retry-After: Seconds to wait before retrying (if rate limited)
+    
+    Purpose: Inform clients about rate limit status for better UX
+    """
+    
+    def __init__(self, get_response):
+        self.get_response = get_response
+    
+    def __call__(self, request):
+        response = self.get_response(request)
+        
+        # Add rate limit headers if available
+        if hasattr(request, 'rate_limit_remaining'):
+            if hasattr(request, 'rate_limit_limit'):
+                response['X-RateLimit-Limit'] = str(request.rate_limit_limit)
+            if hasattr(request, 'rate_limit_remaining'):
+                response['X-RateLimit-Remaining'] = str(request.rate_limit_remaining)
+            if hasattr(request, 'rate_limit_reset') and request.rate_limit_reset:
+                import time
+                reset_time = int(time.time()) + request.rate_limit_reset
+                response['X-RateLimit-Reset'] = str(reset_time)
+                # Add Retry-After for 429 responses
+                if response.status_code == 429:
+                    response['Retry-After'] = str(request.rate_limit_reset)
+        
+        return response
+
 
 class CustomAdminSessionMiddleware:
     def __init__(self, get_response):

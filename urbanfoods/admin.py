@@ -3,9 +3,11 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from unfold.admin import ModelAdmin
 from django.utils.html import format_html
 from django.urls import reverse
+from django.utils import timezone
 from .mpesa_utils import encrypt_value, decrypt_value
 from django.forms import PasswordInput, CharField
 from .models import *
+from .audit_logging import PaymentAuditLog, PaymentAuditLogAdmin
 
 @admin.register(User)
 class CustomUserAdmin(BaseUserAdmin, ModelAdmin):
@@ -21,6 +23,131 @@ class CustomUserAdmin(BaseUserAdmin, ModelAdmin):
         ('Bank Info', {'fields': ('bank_account_name', 'bank_account_number', 'bank_name')}),
         ('Legacy Info', {'fields': ('phone_number', 'default_hostel', 'default_room', 'student_email', 'loyalty_points', 'is_verified')}),
     )
+
+
+@admin.register(WalletLedger)
+class WalletLedgerAdmin(ModelAdmin):
+    list_display = ('user', 'entry_type', 'amount', 'balance_before', 'balance_after', 'reference_type', 'created_at')
+    list_filter = ('entry_type', 'reference_type', 'created_at')
+    search_fields = ('user__username', 'idempotency_key', 'reference_id')
+    readonly_fields = ('user', 'entry_type', 'amount', 'reference_type', 'reference_id', 'idempotency_key', 'balance_before', 'balance_after', 'created_at')
+
+
+@admin.register(LoyaltyLedger)
+class LoyaltyLedgerAdmin(ModelAdmin):
+    list_display = ('user', 'entry_type', 'points', 'source_payment_id', 'created_at')
+    list_filter = ('entry_type', 'created_at')
+    search_fields = ('user__username', 'idempotency_key', 'source_payment_id')
+    readonly_fields = ('user', 'entry_type', 'points', 'source_payment_id', 'idempotency_key', 'created_at')
+
+
+@admin.register(OutboxEvent)
+class OutboxEventAdmin(ModelAdmin):
+    list_display = ('event_type', 'aggregate_type', 'aggregate_id', 'status', 'attempts', 'next_attempt_at', 'processed_at')
+    list_filter = ('event_type', 'status', 'created_at')
+    search_fields = ('aggregate_id', 'idempotency_key', 'last_error')
+    readonly_fields = ('event_type', 'aggregate_type', 'aggregate_id', 'payment_attempt', 'payload', 'status', 'idempotency_key', 'attempts', 'next_attempt_at', 'processed_at', 'last_error', 'created_at', 'updated_at')
+
+
+# 🛡️ PCI DSS: Admin audit actions for payment operations
+@admin.action(description='Queue selected payments for reconciliation')
+def queue_payment_reconciliation(modeladmin, request, queryset):
+    """Queue payments for reconciliation with audit logging."""
+    for payment in queryset:
+        payment.next_reconciliation_at = timezone.now()
+        payment.reconciliation_started_at = None
+        payment.save()
+        
+        # Log the action
+        PaymentAuditLog.log_action(
+            admin_user=request.user,
+            content_type='PaymentAttempt',
+            object_id=payment.id,
+            action='update',
+            reason='Queued for reconciliation via Django admin',
+            request=request
+        )
+
+
+@admin.action(description='Move selected payments to manual review')
+def mark_payment_manual_review(modeladmin, request, queryset):
+    """Mark payments for manual review with audit logging."""
+    for payment in queryset:
+        payment.status = PaymentAttempt.Status.MANUAL_REVIEW
+        payment.manual_review_reason = 'Marked for operator review in Django admin.'
+        payment.save()
+        
+        # 🛡️ PCI DSS 10.2: Log admin action for compliance
+        PaymentAuditLog.log_action(
+            admin_user=request.user,
+            content_type='PaymentAttempt',
+            object_id=payment.id,
+            action='manual_review',
+            reason='Marked for manual review via Django admin',
+            changes={'status': {'old': payment.status, 'new': PaymentAttempt.Status.MANUAL_REVIEW}},
+            request=request
+        )
+
+
+@admin.register(PaymentAttempt)
+class PaymentAttemptAdmin(ModelAdmin):
+    list_display = ('public_payment_id', 'payment_type', 'status', 'expected_amount', 'received_amount', 'checkout_request_id', 'reconciliation_attempts', 'created_at')
+    list_filter = ('payment_type', 'status', 'provider', 'created_at')
+    search_fields = ('public_payment_id', 'checkout_request_id', 'provider_receipt', 'failure_code', 'manual_review_reason')
+    actions = (queue_payment_reconciliation, mark_payment_manual_review)
+
+
+@admin.register(PaymentReconciliation)
+class PaymentReconciliationAdmin(ModelAdmin):
+    list_display = ('payment_attempt', 'attempt_number', 'status', 'result_code', 'created_at')
+    list_filter = ('status', 'created_at')
+    search_fields = ('payment_attempt__checkout_request_id', 'error_message', 'result_description')
+    readonly_fields = ('payment_attempt', 'attempt_number', 'status', 'result_code', 'result_description', 'raw_response', 'error_message', 'created_at')
+
+# 🛡️ PCI DSS: Register audit log admin (read-only)
+@admin.register(PaymentAuditLog)
+class PaymentAuditLogAdminView(ModelAdmin):
+    """Read-only audit log for payment admin actions."""
+    list_display = (
+        'timestamp',
+        'admin_user',
+        'action',
+        'content_type',
+        'object_id',
+        'ip_address',
+    )
+    list_filter = (
+        'action',
+        'content_type',
+        'timestamp',
+        'admin_user',
+    )
+    search_fields = (
+        'admin_user__username',
+        'object_id',
+        'reason',
+        'ip_address',
+    )
+    readonly_fields = (
+        'timestamp',
+        'admin_user',
+        'content_type',
+        'object_id',
+        'action',
+        'reason',
+        'changes',
+        'ip_address',
+        'user_agent',
+    )
+    
+    def has_add_permission(self, request):
+        return False
+    
+    def has_delete_permission(self, request, obj=None):
+        return False
+    
+    def has_change_permission(self, request, obj=None):
+        return False
 
 @admin.register(FoodCategory)
 class FoodCategoryAdmin(ModelAdmin):

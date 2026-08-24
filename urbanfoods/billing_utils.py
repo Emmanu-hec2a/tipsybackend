@@ -117,3 +117,35 @@ class SubscriptionBilling:
         except Exception as e:
             logger.exception("Subscription STK Push failed")
             return {"success": False, "message": str(e)}
+
+    def query_stk_status(self, checkout_request_id):
+        from django.utils import timezone
+        access_token = self.get_access_token()
+        if not access_token:
+            return {'success': False, 'message': 'Access token error'}
+        timestamp = timezone.localtime(timezone.now()).strftime('%Y%m%d%H%M%S')
+        password = base64.b64encode(f'{self.shortcode}{self.passkey}{timestamp}'.encode()).decode()
+        try:
+            response = requests.post(
+                f'{self.base_url}/mpesa/stkpushquery/v1/query',
+                json={'BusinessShortCode': self.shortcode, 'Password': password,
+                      'Timestamp': timestamp, 'CheckoutRequestID': checkout_request_id},
+                headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'},
+                timeout=20,
+            )
+            response.raise_for_status()
+            result = response.json()
+            return {
+                'success': True,
+                'result_code': int(result.get('ResultCode', -1)),
+                'result_desc': result.get('ResultDesc', ''),
+                'metadata': {
+                    'Amount': result.get('Amount'),
+                    'MpesaReceiptNumber': result.get('MpesaReceiptNumber'),
+                    'PhoneNumber': result.get('PhoneNumber'),
+                    'TransactionDate': result.get('TransactionDate'),
+                },
+            }
+        except Exception:
+            logger.exception('Subscription STK query failed')
+            return {'success': False, 'message': 'Network error'}

@@ -2,14 +2,17 @@ from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.throttling import ScopedRateThrottle
 from django.utils import timezone
 from datetime import date, timedelta
 from django.conf import settings
 from django.db import transaction
 from decimal import Decimal, InvalidOperation
-from .models import Store, SubscriptionPayment, Order
+from .models import Store, SubscriptionPayment, Order, PaymentAttempt
 from .api_v1_partner_views import PartnerStoreMixin
 from .billing_utils import SubscriptionBilling
+from .payment_initiation import InitiatePaymentService, PaymentInitiationConflict
+from .payment_throttles import PaymentAttemptThrottle
 from .views import safaricom_ip_required
 from django.views.decorators.csrf import csrf_exempt
 import json
@@ -27,8 +30,11 @@ def subscription_callback(request):
     data = request.data
     callback_data = data.get('Body', {}).get('stkCallback', {})
     checkout_request_id = callback_data.get('CheckoutRequestID')
+    from .observability import increment_metric, log_payment_event
+    increment_metric('payment_callback_received_total')
     if not checkout_request_id:
-        return Response({'status': 'ignored', 'message': 'CheckoutRequestID missing'}, status=status.HTTP_200_OK)
+        increment_metric('payment_unmatched_total')
+        return Response({'status': 'ignored'}, status=status.HTTP_200_OK)
 
     result_code = callback_data.get('ResultCode')
     try:
@@ -41,91 +47,24 @@ def subscription_callback(request):
         for item in callback_data.get('CallbackMetadata', {}).get('Item', [])
     }
 
-    try:
-        with transaction.atomic():
-            # 🛡️ ARCHITECTURAL HARDENING: Strict Idempotency & Raw Logging
-            payment = SubscriptionPayment.objects.select_for_update().get(
-                checkout_request_id=checkout_request_id
-            )
-
-            if payment.status == 'success':
-                return Response({'status': 'ok', 'payment_status': 'success'})
-
-            payment.result_code = result_code
-            payment.result_desc = callback_data.get('ResultDesc', '')
-            payment.phone_number = str(metadata.get('PhoneNumber') or payment.phone_number)
-            payment.transaction_date = str(metadata.get('TransactionDate') or '')
-            payment.mpesa_receipt = metadata.get('MpesaReceiptNumber')
-            payment.raw_callback = data # 🛡️ Audit Trail
-
-            if result_code != 0:
-                payment.status = 'failed'
-                payment.save()
-                return Response({'status': 'ok', 'payment_status': 'failed'})
-
-            try:
-                raw_amt = metadata.get('Amount')
-                received_amount = Decimal(str(raw_amt)) if raw_amt is not None else None
-            except (InvalidOperation, TypeError, ValueError):
-                received_amount = None
-
-            # 🛡️ HARDENING: Standardized Amount Verification
-            if received_amount is None or received_amount < Decimal('1.0'):
-                payment.status = 'failed'
-                payment.result_desc = f"Invalid Amount: {received_amount}"
-                payment.save()
-                return Response({'status': 'ok', 'payment_status': 'failed'})
-
-            if received_amount != payment.amount:
-                payment.status = 'failed'
-                payment.result_desc = f"Amount mismatch: {received_amount} vs {payment.amount}"
-                payment.save()
-                return Response({'status': 'ok', 'payment_status': 'failed'})
-
-            store = payment.store
-            today = timezone.localdate()
-            
-            current_expiry = store.subscription_expires
-            base_date = current_expiry if (current_expiry and current_expiry > today) else today
-
-            store.billing_status = 'active'
-            store.is_active = True
-            store.subscription_expires = base_date + timedelta(days=30)
-            if payment.plan:
-                store.plan = payment.plan
-                store.plan_price = payment.amount
-                store.is_pro = payment.plan == 'pro'
-            store.last_payment_date = today
-            store.save(update_fields=[
-                'billing_status', 'is_active', 'subscription_expires',
-                'plan', 'plan_price', 'is_pro', 'last_payment_date'
-            ])
-
-            if payment.payment_type == 'commission' and payment.week_stat:
-                week_stat = payment.week_stat
-                week_stat.status = 'paid'
-                week_stat.save(update_fields=['status'])
-
-            payment.status = 'success'
-            payment.save()
-
-            if store.telegram_chat_id:
-                from .tasks import send_telegram_notification_task
-                send_telegram_notification_task.delay(
-                    store.telegram_chat_id,
-                    f"✅ *Subscription Renewed*\nYour store *{store.name}* is active until {store.subscription_expires}."
-                )
-            
-        return Response({'status': 'ok', 'payment_status': 'success'})
-    except SubscriptionPayment.DoesNotExist:
-        logger.warning('Unknown subscription CheckoutRequestID: %s', checkout_request_id)
-        return Response({'status': 'ignored'}, status=status.HTTP_200_OK)
-    except Exception as e:
-        logger.exception('Subscription callback processing failed')
-        return Response({'status': 'error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    from .payment_service import ConfirmPaymentService
+    success = ConfirmPaymentService.process_payment_signal(
+        checkout_request_id=checkout_request_id,
+        result_code=result_code,
+        result_desc=callback_data.get('ResultDesc', ''),
+        metadata=metadata,
+        source='billing_callback'
+    )
+    increment_metric('payment_callback_processing_total')
+    log_payment_event('payment_callback_processed', source='billing_callback',
+                      checkout_request_id=checkout_request_id[-6:], success=success)
+    
+    return Response({'status': 'ok', 'success': success})
 
 class PayNowView(PartnerStoreMixin, APIView):
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'payment_initiation'
 
     def post(self, request):
         phone = request.data.get('phone')
@@ -141,58 +80,60 @@ class PayNowView(PartnerStoreMixin, APIView):
                 'base': Decimal('3000.00'),
                 'pro': Decimal('5000.00'),
             }.get(requested_plan, store.plan_price)
+            key = request.headers.get('Idempotency-Key') or request.data.get('idempotency_key')
+            existing = SubscriptionPayment.objects.filter(payment_idempotency_key=key).first() if key else None
+            if existing:
+                payment = existing
+                attempt, _ = InitiatePaymentService.create_or_get_for_subscription(payment, payment.phone_number, key)
+                return Response({'status': attempt.status, 'payment_id': str(attempt.public_payment_id),
+                                 'checkout_request_id': attempt.checkout_request_id, 'amount': payment.amount,
+                                 'idempotency_key': attempt.idempotency_key, 'is_async': True})
 
             # 🛡️ HARDENING: Prevent overlapping STK pushes
             active_pending = SubscriptionPayment.objects.filter(
                 store=store, 
                 status='pending',
                 created_at__gt=timezone.now() - timedelta(minutes=2)
-            ).exists()
+            ).order_by('-created_at').first()
             
             if active_pending and not request.data.get('force'):
+                active_attempt = PaymentAttempt.objects.filter(
+                    subscription_payment=active_pending,
+                    status__in=[PaymentAttempt.Status.INITIATING, PaymentAttempt.Status.PENDING],
+                ).order_by('-created_at').first()
                 return Response({
-                    'error': 'A payment is already in progress. Please wait 2 minutes.'
+                    'error': 'A payment is already in progress. Please wait 2 minutes.',
+                    'payment_id': str(active_attempt.public_payment_id) if active_attempt else None,
+                    'checkout_request_id': active_attempt.checkout_request_id if active_attempt else active_pending.checkout_request_id,
+                    'status': active_attempt.status if active_attempt else active_pending.status,
+                    'amount': active_attempt.expected_amount if active_attempt else active_pending.amount,
                 }, status=status.HTTP_409_CONFLICT)
 
             from .mpesa_utils import MpesaIntegration
-            mpesa = MpesaIntegration()
-            formatted_phone = mpesa.format_phone_number(phone or store.owner.phone)
+            formatted_phone = MpesaIntegration().format_phone_number(phone or store.owner.phone)
+            if not existing:
+                is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
+                stk_amount = int(requested_amount) if is_production else 1
+                payment = SubscriptionPayment.objects.create(
+                    store=store,
+                    amount=stk_amount,
+                    plan=requested_plan,
+                    status='pending',
+                    phone_number=formatted_phone,
+                    payment_idempotency_key=key,
+                )
 
-            is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
-            stk_amount = int(requested_amount) if is_production else 1
-            
-            payment = SubscriptionPayment.objects.create(
-                store=store,
-                amount=stk_amount,
-                plan=requested_plan,
-                status='pending',
-                phone_number=formatted_phone,
-            )
-
-            billing = SubscriptionBilling()
-            result = billing.charge_subscription(
-                store, custom_phone=phone, amount=stk_amount
-            )
-            
-            if result['success']:
-                checkout_request_id = result.get('checkout_request_id')
-                if not checkout_request_id:
-                    payment.status = 'failed'
-                    payment.save()
-                    return Response({'error': 'No checkout ID'}, status=status.HTTP_502_BAD_GATEWAY)
-                
-                payment.checkout_request_id = checkout_request_id
-                payment.save()
-                
-                return Response({
-                    'status': 'pending',
-                    'checkout_request_id': payment.checkout_request_id,
-                    'amount': payment.amount,
-                })
-            
-            payment.status = 'failed'
-            payment.save()
-            return Response({'error': result['message']}, status=status.HTTP_400_BAD_REQUEST)
+            attempt, _ = InitiatePaymentService.create_or_get_for_subscription(payment, formatted_phone, key)
+            return Response({
+                'status': attempt.status,
+                'payment_id': str(attempt.public_payment_id),
+                'checkout_request_id': attempt.checkout_request_id,
+                'amount': payment.amount,
+                'idempotency_key': attempt.idempotency_key,
+                'is_async': True,
+            })
+        except PaymentInitiationConflict as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_409_CONFLICT)
         except Exception as e:
             logger.exception("PayNowView error")
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -200,6 +141,8 @@ class PayNowView(PartnerStoreMixin, APIView):
 
 class SubscriptionPaymentStatusView(PartnerStoreMixin, APIView):
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'payment_status'
 
     def get(self, request):
         store = self.get_store(request)
@@ -218,6 +161,44 @@ class SubscriptionPaymentStatusView(PartnerStoreMixin, APIView):
             'payment_status': payment.status,
             'checkout_request_id': payment.checkout_request_id,
             'amount': payment.amount,
+        })
+
+
+class PartnerPaymentAttemptStatusView(PartnerStoreMixin, APIView):
+    """Authoritative status for a merchant-owned subscription/commission attempt."""
+
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle, PaymentAttemptThrottle]
+    throttle_scope = 'payment_status'
+
+    def get(self, request, payment_id):
+        store = self.get_store(request)
+        if not store:
+            return Response({'error': 'No store associated'}, status=status.HTTP_400_BAD_REQUEST)
+
+        attempt = PaymentAttempt.objects.select_related('subscription_payment').filter(
+            public_payment_id=payment_id,
+            subscription_payment__store=store,
+        ).first()
+        if not attempt:
+            return Response({'error': 'Payment attempt not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        target = attempt.subscription_payment
+        return Response({
+            'payment_id': str(attempt.public_payment_id),
+            'payment_type': attempt.payment_type,
+            'status': attempt.status,
+            'payment_status': attempt.status,
+            'checkout_request_id': attempt.checkout_request_id,
+            'amount': str(attempt.expected_amount),
+            'currency': attempt.currency,
+            'receipt': attempt.provider_receipt or target.mpesa_receipt,
+            'provider_receipt': attempt.provider_receipt or target.mpesa_receipt,
+            'failure_code': attempt.failure_code,
+            'failure_message': attempt.failure_message or attempt.manual_review_reason,
+            'manual_review_reason': attempt.manual_review_reason,
+            'created_at': attempt.created_at.isoformat(),
+            'updated_at': (attempt.confirmed_at or attempt.failed_at or attempt.expired_at or attempt.created_at).isoformat(),
         })
 
 class SubscriptionHistoryView(APIView):

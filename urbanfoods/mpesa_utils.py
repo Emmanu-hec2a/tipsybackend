@@ -9,6 +9,9 @@ from django.core.cache import cache
 from cryptography.fernet import Fernet
 import json
 from django.utils import timezone
+from urbanfoods.tls_pinning import create_safaricom_session
+from urbanfoods.secrets_manager import get_hybrid_credential_store
+from urbanfoods.phone_validation import PhoneNumberValidator
 
 logger = logging.getLogger(__name__)
 
@@ -16,12 +19,11 @@ logger = logging.getLogger(__name__)
 # ENCRYPTION UTILS
 # =========================
 def get_encryption_key():
-    """Get encryption key from settings/env. Generates one if missing (NOT FOR PRODUCTION)."""
+    """Return the configured Fernet key; never use a predictable fallback."""
     from django.conf import settings
     key = getattr(settings, 'ENCRYPTION_KEY', os.environ.get('ENCRYPTION_KEY'))
     if not key:
-        logger.warning("ENCRYPTION_KEY not found in settings or env. Using fallback key.")
-        return b'6csUuoMhN7dvrad3XaJ5ApYcFPV2AEFtlwSUEAzoREU='
+        raise RuntimeError('ENCRYPTION_KEY is required to access payment credentials.')
     
     # Ensure it's bytes
     if isinstance(key, str):
@@ -70,28 +72,47 @@ def log_mpesa_event(event_type, user_id=None, order_number=None, phone=None, amo
 class MpesaIntegration:
     """
     Handles M-Pesa Daraja STK Push using store-specific credentials.
+    
+    🛡️ PCI DSS Requirement 3.2.1: Credentials stored in AWS Secrets Manager with key rotation
+    🛡️ PCI DSS Requirement 4.1: All API calls to M-Pesa use TLS certificate pinning
     """
 
     def __init__(self, store=None):
         self.store = store
+        
+        # 🛡️ PCI DSS: Use AWS Secrets Manager for credential storage (hybrid fallback to DB)
+        credential_store = get_hybrid_credential_store()
+        
         if store:
-            self.consumer_key = decrypt_value(store.mpesa_consumer_key)
-            self.consumer_secret = decrypt_value(store.mpesa_consumer_secret)
-            self.passkey = decrypt_value(store.mpesa_passkey)
-            self.shortcode = store.mpesa_shortcode
+            # Try to get credentials from Secrets Manager or database
+            creds = credential_store.get_credentials(store.id)
+            if creds:
+                self.consumer_key = creds['consumer_key']
+                self.consumer_secret = creds['consumer_secret']
+                self.passkey = creds['passkey']
+                self.shortcode = creds.get('shortcode', store.mpesa_shortcode)
+            else:
+                # Fallback to encrypted fields on store model
+                self.consumer_key = decrypt_value(store.mpesa_consumer_key)
+                self.consumer_secret = decrypt_value(store.mpesa_consumer_secret)
+                self.passkey = decrypt_value(store.mpesa_passkey)
+                self.shortcode = store.mpesa_shortcode
+                
             self.callback_url = store.mpesa_callback_url or os.environ.get('MPESA_CALLBACK_URL')
         else:
-            # Fallback to env variables (legacy/default)
+            # Fallback to env variables (legacy/default) - NOT RECOMMENDED FOR PRODUCTION
             self.consumer_key = os.environ.get('MPESA_CONSUMER_KEY')
             self.consumer_secret = os.environ.get('MPESA_CONSUMER_SECRET')
             self.passkey = os.environ.get('MPESA_PASSKEY')
             self.shortcode = os.environ.get('MPESA_PAYBILL_NUMBER')
             self.callback_url = os.environ.get('MPESA_CALLBACK_URL')
 
-        is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
+        # Store production flag for certificate pinning configuration
+        self.is_production = os.environ.get('MPESA_PRODUCTION', 'false').lower() == 'true'
+        
         self.base_url = (
             'https://api.safaricom.co.ke'
-            if is_production
+            if self.is_production
             else 'https://sandbox.safaricom.co.ke'
         )
 
@@ -117,14 +138,17 @@ class MpesaIntegration:
 
         try:
             logger.info(f"Fetching fresh M-Pesa token from Safaricom. Store={self.store}")
-            response = requests.get(
-                self.access_token_url,
-                auth=(self.consumer_key, self.consumer_secret),
-                timeout=15
-            )
+            
+            # 🛡️ PCI DSS: Use certificate-pinned session for all M-Pesa API calls
+            with create_safaricom_session(is_production=self.is_production) as session:
+                response = session.get(
+                    self.access_token_url,
+                    auth=(self.consumer_key, self.consumer_secret),
+                    timeout=15
+                )
             
             if response.status_code != 200:
-                logger.error(f"M-Pesa Auth Failed (Status {response.status_code}): {response.text}")
+                logger.error("M-Pesa Auth Failed (Status %s)", response.status_code)
                 return None
                 
             data = response.json()
@@ -136,7 +160,7 @@ class MpesaIntegration:
                     pass
                 return token
             else:
-                logger.error(f"M-Pesa Auth Response missing access_token: {data}")
+                logger.error("M-Pesa Auth Response missing access_token")
                 return None
         except Exception:
             logger.exception("Failed to obtain MPESA access token")
@@ -179,12 +203,14 @@ class MpesaIntegration:
         }
 
         try:
-            response = requests.post(
-                self.stk_push_url,
-                json=payload,
-                headers=headers,
-                timeout=20
-            )
+            # 🛡️ PCI DSS: Use certificate-pinned session for all M-Pesa API calls
+            with create_safaricom_session(is_production=self.is_production) as session:
+                response = session.post(
+                    self.stk_push_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=20
+                )
             
             # 🛡️ Task: Detect stale token (401) and retry once
             if response.status_code == 401 or (response.status_code >= 400 and 'invalid' in response.text.lower() and 'token' in response.text.lower()):
@@ -198,7 +224,7 @@ class MpesaIntegration:
             if response.status_code >= 400:
                 try:
                     error_data = response.json()
-                    logger.error(f"Daraja STK Error {response.status_code}: {error_data}")
+                    logger.error("Daraja STK Error %s: %s", response.status_code, error_data.get('errorCode', 'provider_error'))
                     
                     # 🛡️ Task: Notify failure if it's a known non-retryable error
                     # We can't easily notify user here because we don't have user_id, 
@@ -209,7 +235,7 @@ class MpesaIntegration:
                         "error_code": error_data.get('errorCode')
                     }
                 except:
-                    logger.error(f"Daraja STK Raw Error {response.status_code}: {response.text}")
+                    logger.error("Daraja STK Raw Error %s", response.status_code)
                     return {"success": False, "message": "M-Pesa service error"}
 
             result = response.json()
@@ -233,7 +259,6 @@ class MpesaIntegration:
         if not access_token:
             return {'success': False, 'message': 'Authentication failed'}
 
-        # 🛡️ Safaricom expects a specific timestamp format in Nairobi time (EAT)
         timestamp = timezone.localtime(timezone.now()).strftime('%Y%m%d%H%M%S')
         password = self.generate_password(timestamp)
 
@@ -250,31 +275,52 @@ class MpesaIntegration:
         }
 
         try:
-            response = requests.post(
-                self.stk_query_url,
-                json=payload,
-                headers=headers,
-                timeout=20
-            )
-            response.raise_for_status()
-            result = response.json()
+            # 🛡️ PCI DSS: Use certificate-pinned session for all M-Pesa API calls
+            with create_safaricom_session(is_production=self.is_production) as session:
+                response = session.post(
+                    self.stk_query_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=20
+                )
+                response.raise_for_status()
+                result = response.json()
+            
+            # 🛡️ Hardening: Extract structured metadata to match Callback format
+            # This allows the PaymentService to treat both identical.
             return {
                 "success": True,
                 "response_code": result.get("ResponseCode"),
-                "result_code": result.get("ResultCode"),
-                "result_desc": result.get("ResultDesc")
+                "result_code": int(result.get("ResultCode", -1)),
+                "result_desc": result.get("ResultDesc"),
+                "metadata": {
+                    "Amount": result.get("Amount"),
+                    "MpesaReceiptNumber": result.get("MpesaReceiptNumber"),
+                    "PhoneNumber": result.get("PhoneNumber"),
+                    "TransactionDate": result.get("TransactionDate"),
+                }
             }
         except Exception:
             logger.exception("STK Query error")
             return {"success": False, "message": "Network error"}
 
     def format_phone_number(self, phone_number):
-        phone = ''.join(filter(str.isdigit, str(phone_number)))
-        if phone.startswith('0') and len(phone) == 10:
-            return '254' + phone[1:]
-        elif phone.startswith('254') and len(phone) == 12:
-            return phone
-        elif len(phone) == 9:
-            return '254' + phone
-        else:
-            raise ValueError("Invalid phone number format")
+        """
+        Validate and normalize phone number to E.164 format.
+        
+        🛡️ PCI DSS 12.3: Validates against Kenya-specific E.164 format to prevent spoofing
+        
+        Args:
+            phone_number: Phone number in any Kenya format
+        
+        Returns:
+            Normalized phone number in E.164 format (+254XXXXXXXXX)
+        
+        Raises:
+            ValueError: If phone number is invalid
+        """
+        normalized = PhoneNumberValidator.normalize_format(phone_number)
+        if not normalized:
+            is_valid, error = PhoneNumberValidator.validate_format(phone_number)
+            raise ValueError(error or "Invalid phone number format")
+        return normalized

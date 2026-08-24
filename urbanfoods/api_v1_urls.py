@@ -1,5 +1,5 @@
 from django.urls import path, include
-from . import api_v1_partner_views, api_v1_rider_views, api_v1_superadmin_views, api_v1_customer_views, api_v1_billing_views, api_v1_auth_views, views
+from . import api_v1_partner_views, api_v1_rider_views, api_v1_superadmin_views, api_v1_customer_views, api_v1_billing_views, api_v1_auth_views, api_v1_ops_views, views
 
 partner_patterns = [
     path('dashboard/stats/', api_v1_partner_views.DashboardStatsView.as_view(), name='partner_dashboard_stats'),
@@ -36,6 +36,7 @@ partner_patterns = [
     path('billing/pay-now/', api_v1_billing_views.PayNowView.as_view(), name='partner_billing_pay_now'),
     path('billing/downgrade/', api_v1_billing_views.DowngradeToFreeView.as_view(), name='partner_billing_downgrade'),
     path('billing/status/', api_v1_billing_views.SubscriptionPaymentStatusView.as_view(), name='partner_billing_status'),
+    path('payments/<uuid:payment_id>/', api_v1_billing_views.PartnerPaymentAttemptStatusView.as_view(), name='partner_payment_attempt_status'),
     path('payments/mpesa/initiate/', api_v1_billing_views.PayNowView.as_view(), name='partner_payments_mpesa_initiate'),
     path('billing/history/', api_v1_billing_views.SubscriptionHistoryView.as_view(), name='partner_billing_history'),
     path('rider-settlements/', api_v1_partner_views.RiderSettlementListView.as_view(), name='partner_rider_settlements'),
@@ -61,6 +62,7 @@ customer_patterns = [
     path('orders/<int:pk>/', api_v1_customer_views.CustomerOrderDetailView.as_view(), name='customer_order_detail'),
     path('orders/<int:pk>/payment-status/', api_v1_customer_views.CustomerOrderPaymentStatusView.as_view(), name='customer_order_payment_status'),
     path('orders/<int:pk>/mpesa-query/', api_v1_customer_views.CustomerMpesaQueryView.as_view(), name='customer_order_mpesa_query'),
+    path('payments/<uuid:payment_id>/', api_v1_customer_views.CustomerPaymentAttemptStatusView.as_view(), name='customer_payment_attempt_status'),
     path('orders/<int:pk>/rate/', api_v1_customer_views.CustomerRateOrderView.as_view(), name='customer_rate_order'),
     path('shiriki/create/', api_v1_customer_views.ShirikiCreateView.as_view(), name='shiriki_create'),
     path('shiriki/session/<str:invite_code>/', api_v1_customer_views.ShirikiSessionDetailView.as_view(), name='shiriki_detail'),
@@ -122,6 +124,7 @@ urlpatterns = [
     path('superadmin/', include(superadmin_patterns)),
     path('auth/', include(auth_patterns)),
     path('billing/callback/', api_v1_billing_views.subscription_callback, name='subscription_callback'),
+    path('ops/payment-metrics/', api_v1_ops_views.PaymentMetricsView.as_view(), name='ops_payment_metrics'),
     path('geocode/reverse/', views.reverse_geocode, name='api_reverse_geocode'),
     path('orders/<str:order_number>/verification-image/', views.OrderVerificationImageView.as_view(), name='order_verification_image'),
     path('orders/<int:order_id>/chat/', api_v1_customer_views.OrderChatMessagesView.as_view(), name='order_chat_messages'),

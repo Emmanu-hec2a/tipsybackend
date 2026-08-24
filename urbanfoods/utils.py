@@ -346,8 +346,16 @@ def update_weekly_revenue_share(order):
     from decimal import Decimal
     from datetime import timedelta
     from django.utils import timezone
+    from .models import Order
+    applied_at = timezone.now()
     
     if not order.store:
+        return
+
+    claimed = Order.objects.filter(
+        pk=order.pk, revenue_share_applied_at__isnull=True
+    ).update(revenue_share_applied_at=applied_at)
+    if not claimed:
         return
 
     # Calculate liquor total for this order

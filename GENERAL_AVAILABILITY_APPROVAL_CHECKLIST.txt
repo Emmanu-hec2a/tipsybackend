@@ -1,0 +1,174 @@
+TipsyTheoryy Phase 16 General Availability Approval Checklist
+==============================================================
+
+Purpose
+-------
+Approve or reject unrestricted production availability after staging
+certification and controlled production launch. This checklist requires
+evidence; implementation intent is not sufficient for approval.
+
+Approval rule
+-------------
+
+General availability is approved only when every P0/P1 gate below is marked
+PASS by the responsible owner. Any FAIL, UNKNOWN, or missing evidence blocks
+approval.
+
+1. Infrastructure and deployment
+--------------------------------
+
+  [ ] Production PostgreSQL is healthy, backed up, monitored, and restorable.
+  [ ] Production Redis is healthy and monitored.
+  [ ] Web, Celery worker, and Celery beat services run the same approved commit.
+  [ ] All migrations are applied and `showmigrations` has no pending entries.
+  [ ] `python manage.py check --deploy` passes without security warnings.
+  [ ] Production startup fails closed when required variables are absent.
+  [ ] DEBUG is false and explicit hosts are configured.
+  [ ] HTTPS, proxy headers, HSTS, secure cookies, and callback routing are
+      verified through the production edge.
+  [ ] Backup restore and application rollback evidence is attached.
+
+Evidence: deployment IDs, commit SHA, migration output, health checks, backup
+ID, restore result, and rollback drill result.
+
+2. Secrets and security
+-----------------------
+
+  [ ] Django SECRET_KEY was rotated and old values revoked.
+  [ ] ENCRYPTION_KEY migration was completed and all encrypted payment
+      credentials were verified after re-encryption.
+  [ ] Safaricom production credentials were rotated and old credentials revoked.
+  [ ] Revenue-gate secret was rotated.
+  [ ] ALLOWED_HOSTS and TRUSTED_PROXY_IPS match the approved production edge.
+  [ ] Query-string JWT authentication is disabled in production.
+  [ ] Payment initiation/status/query throttles are active.
+  [ ] Customer and merchant payment ownership isolation tests pass.
+  [ ] Raw callback/payment-record access is restricted to approved operators.
+  [ ] Dependency, secret, SAST, and DAST scans are complete with findings
+      reviewed and accepted or remediated.
+
+Evidence: secret rotation record, scan reports, access review, and security
+test results. Never attach secret values.
+
+3. Payment correctness
+----------------------
+
+  [ ] One authoritative payment confirmation service is active.
+  [ ] Provider checkout IDs and receipts are constrained and traceable.
+  [ ] Duplicate initiation tests pass under PostgreSQL concurrency.
+  [ ] Duplicate callback tests pass under PostgreSQL concurrency.
+  [ ] Callback before checkout persistence is recovered safely.
+  [ ] Provider timeout/failure results in a bounded safe state.
+  [ ] Reconciliation recovers lost callbacks.
+  [ ] Amount mismatch enters manual review without financial effects.
+  [ ] Terminal states are idempotent.
+  [ ] Order, subscription, Shiriki, wallet, and loyalty effects are atomic.
+  [ ] Outbox events are durable, idempotent, retryable, and dead-lettered.
+  [ ] No duplicate charge, ledger, wallet, loyalty, or subscription effect was
+      observed during staging or controlled launch.
+
+Evidence: staging scenario report, PostgreSQL concurrency output, payment IDs,
+receipts, ledger references, reconciliation results, and incident review.
+
+4. Client readiness
+-------------------
+
+  [ ] Flutter client uses payment_id and supports all terminal payment states.
+  [ ] Flutter app restart resumes pending payments.
+  [ ] Flutter duplicate taps do not create duplicate attempts.
+  [ ] Flutter delayed callbacks update the authoritative state.
+  [ ] Merchant panel uses payment_id and idempotency headers.
+  [ ] Merchant browser restart resumes pending payments.
+  [ ] Merchant delayed callbacks update without page reload.
+  [ ] Merchant manual-review, overpaid, expired, failed, and provider-unavailable
+      states are visible and actionable.
+  [ ] API compatibility rollout was completed and legacy paths are either
+      disabled or under an approved observation/deprecation window.
+  [ ] No client has been upgraded outside the approved release process.
+
+Evidence: Flutter tests/build artifacts, merchant lint/build artifacts, device
+tests, browser tests, API compatibility report, and release versions.
+
+5. Observability and operations
+-------------------------------
+
+  [ ] Payment metrics endpoint is restricted and accessible to operators.
+  [ ] Initiation, callback, confirmation, failure, reconciliation, duplicate,
+      mismatch, manual-review, and outbox metrics are visible.
+  [ ] Confirmation latency average/p95 is visible.
+  [ ] Pending payment age and callback/outbox backlogs are visible.
+  [ ] Alerts are configured, tested, and delivered to the on-call channel.
+  [ ] Logs include payment ID, type, provider, source, and redacted checkout ID.
+  [ ] Logs contain no PINs, full credentials, provider tokens, or unnecessary
+      raw sensitive payloads.
+  [ ] On-call owner and escalation contacts are documented.
+  [ ] Payment support has a manual-review/refund/reversal procedure.
+  [ ] Automated refunds/reversals are explicitly not enabled and this is
+      communicated to support and operations.
+
+Evidence: dashboard links, alert test timestamps, sample redacted logs, runbook
+links, and on-call acknowledgement.
+
+6. Staging and controlled-launch outcomes
+------------------------------------------
+
+  [ ] Phase 14 staging certification passed all critical scenarios.
+  [ ] Redis, Celery, database, and provider failure injection passed.
+  [ ] PostgreSQL load/concurrency tests passed at the approved target volume.
+  [ ] Phase 14 rollback drill passed.
+  [ ] Phase 15 internal cohort launch passed.
+  [ ] Phase 15 cohort expansion gates remained within thresholds.
+  [ ] No unresolved P0/P1 incident remains open.
+  [ ] Production data reconciliation is clean.
+  [ ] Business owner approved the measured payment success/failure rates.
+
+Evidence: signed Phase 14 and Phase 15 reports, metrics export, incident list,
+reconciliation report, and business approval.
+
+7. Residual risk acceptance
+---------------------------
+
+The following must be explicitly accepted by the business and payment owner:
+
+  - Automated refunds/reversals are not currently implemented.
+  - Manual review is required for amount mismatches, overpayments, and refund-
+    required cases.
+  - Provider delays can leave payments pending until callback or reconciliation.
+  - Observability counters depend on Redis, while database payment records are
+    authoritative.
+
+Approval signatures
+-------------------
+
+Engineering owner: ____________________ Date: __________
+
+Payment operations owner: ______________ Date: __________
+
+Security owner: ________________________ Date: __________
+
+Support/on-call owner: _________________ Date: __________
+
+Business owner: ________________________ Date: __________
+
+Final decision
+--------------
+
+  [ ] APPROVED FOR GENERAL AVAILABILITY
+  [ ] APPROVED WITH EXPLICIT RESIDUAL-RISK ACCEPTANCE
+  [ ] NOT APPROVED - REMEDIATION REQUIRED
+
+Decision notes:
+
+______________________________________________________________________________
+______________________________________________________________________________
+______________________________________________________________________________
+
+Current decision for this workspace
+------------------------------------
+
+NOT APPROVED YET.
+
+Phase 14 staging certification has not been executed against Railway
+PostgreSQL/Redis/Celery and Safaricom sandbox infrastructure, and Phase 15
+controlled production launch evidence has not been produced. This checklist
+must remain open until those gates are completed.

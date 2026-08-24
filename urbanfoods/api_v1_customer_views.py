@@ -2,9 +2,11 @@ from rest_framework import generics, permissions, status
 from datetime import date
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import os
 from django.shortcuts import get_object_or_404
+from django.core.cache import cache
 from django.db.models import Q, F, ExpressionWrapper, DecimalField, FloatField, Avg, Exists, OuterRef, Value, BooleanField, Count
 from django.db.models.functions import Sqrt, Power
 from .models import (
@@ -12,7 +14,7 @@ from .models import (
     OrderStatusHistory, FoodCategory, Promotion, ChatMessage,
     ShirikiSession, ShirikiContribution, User
 )
-from .tasks import trigger_stk_push_task
+from .payment_initiation import InitiatePaymentService, PaymentInitiationConflict
 from .api_v1_serializers import (
     StoreSerializer, FoodItemSerializer, OrderSerializer, 
     UserSerializer, SavedAddressSerializer, FoodCategorySerializer, 
@@ -20,8 +22,6 @@ from .api_v1_serializers import (
     ShirikiSessionSerializer, ShirikiContributionSerializer
 )
 
-import string
-import random
 from decimal import Decimal, InvalidOperation
 from django.db.models import Sum
 from django.utils import timezone
@@ -29,8 +29,20 @@ from .permissions import IsCustomer
 from .mpesa_utils import MpesaIntegration
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from .utils import calculate_risk_score
+from .order_idempotency import order_request_fingerprint, validate_idempotency_key
+from .shiriki_service import ShirikiCapacityConflict, ShirikiService, ShirikiSessionConflict
+from .payment_status import (
+    TERMINAL_PAYMENT_STATUSES, cache_status, get_cached_status, next_poll_after, retry_after,
+)
+from .payment_throttles import PaymentAttemptThrottle
+from .rate_limiting import (  # 🛡️ Day 2: Rate Limiting Classes
+    PaymentStatusThrottle, 
+    GlobalAuthenticatedThrottle,
+    GlobalAnonymousThrottle,
+    ListEndpointThrottle,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -195,23 +207,18 @@ class CustomerRedeemPointsView(APIView):
 
     def post(self, request):
         user = request.user
-        points = user.loyalty_points
-        
-        if points < 1000:
-            return Response({'error': 'Minimum 1,000 points required to redeem.'}, status=400)
-        
-        # 100 points = 1 KSh
-        redeem_value = points / 100
-        
-        user.loyalty_points = 0
-        user.wallet_balance = F('wallet_balance') + redeem_value
-        user.save()
-        user.refresh_from_db()
+        from .ledger_service import FinancialLedgerService, LedgerConflict
+        try:
+            points, redeem_value, new_balance, new_points = FinancialLedgerService.redeem_points(
+                user.id, request.headers.get('Idempotency-Key') or f'points-redemption-{user.id}-{uuid.uuid4()}'
+            )
+        except LedgerConflict as exc:
+            return Response({'error': str(exc)}, status=409)
         
         return Response({
             'message': f'Successfully redeemed {points} points for KSh {redeem_value}.',
-            'new_balance': user.wallet_balance,
-            'new_points': user.loyalty_points
+            'new_balance': new_balance,
+            'new_points': new_points
         })
 
 class CustomerProductListView(generics.ListAPIView):
@@ -287,26 +294,48 @@ class CustomerOrderDetailView(generics.RetrieveAPIView):
 
 class CustomerOrderPaymentStatusView(APIView):
     permission_classes = [IsCustomer]
+    throttle_classes = [PaymentStatusThrottle]  # 🛡️ 30 requests/hour per user (Day 2)
 
     def get(self, request, pk):
         # 🛡️ SHIRIKI GUARD: Allow access for participants
+        cache_key = f'tipsy:order-payment-status:{request.user.id}:{pk}'
+        try:
+            cached = cache.get(cache_key)
+        except Exception:
+            cached = None
+        if cached:
+            response = Response(cached)
+            response['Cache-Control'] = 'private, max-age=2'
+            return response
         order = get_object_or_404(
             Order.objects.filter(
                 Q(user=request.user) | 
                 Q(shiriki_session__contributions__user=request.user, shiriki_session__contributions__status='confirmed')
-            ).distinct(), 
+            ).distinct(),
             pk=pk
         )
-        return Response({
+        cache_key = f'tipsy:order-payment-status:{request.user.id}:{order.id}'
+        payload = {
             'order_id': order.id,
             'order_number': order.order_number,
             'payment_status': order.payment_status,
             'status': order.status,
-            'mpesa_checkout_request_id': order.mpesa_checkout_request_id
-        })
+            'mpesa_checkout_request_id': order.mpesa_checkout_request_id,
+            'terminal': order.payment_status in ('paid', 'failed', 'cancelled'),
+            'next_poll_after_seconds': 5 if order.payment_status == 'pending' else None,
+        }
+        try:
+            cache.set(cache_key, payload, timeout=30 if payload['terminal'] else 2)
+        except Exception:
+            pass
+        response = Response(payload)
+        response['Cache-Control'] = 'private, max-age=30' if payload['terminal'] else 'private, max-age=2'
+        return response
 
 class CustomerMpesaQueryView(APIView):
     permission_classes = [IsCustomer]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'payment_query'
 
     def post(self, request, pk):
         order = get_object_or_404(Order, pk=pk, user=request.user)
@@ -331,25 +360,68 @@ class CustomerMpesaQueryView(APIView):
             result = mpesa.query_stk_status(order.mpesa_checkout_request_id)
             
             if result.get('success'):
-                res_code = result.get('result_code')
-                
-                # If success (0), manually confirm payment if callback was lost
-                if str(res_code) == '0':
-                    from .views import _confirm_payment
-                    from django.db import transaction
-                    with transaction.atomic():
-                        _confirm_payment(order, notes="Confirmed via manual STK query fallback")
+                from .payment_service import ConfirmPaymentService
+                ConfirmPaymentService.process_payment_signal(
+                    checkout_request_id=order.mpesa_checkout_request_id,
+                    result_code=result.get('result_code'),
+                    result_desc=result.get('result_desc', 'STK Query result'),
+                    metadata=result.get('metadata', {}),
+                    source='customer_stk_query',
+                )
+                order.refresh_from_db(fields=['payment_status'])
+                if order.payment_status == 'paid':
                     return Response({'status': 'paid', 'message': 'Payment confirmed'})
-                elif res_code:
-                    # If specific failure code returned by Safaricom
-                    from .views import _fail_payment
-                    _fail_payment(order, reason=result.get('result_desc', 'STK Query reported failure'))
+                if order.payment_status == 'failed':
                     return Response({'status': 'failed', 'message': result.get('result_desc')})
             
             return Response({'status': order.payment_status, 'message': 'Still pending or query failed'})
         except Exception as e:
             logger.exception(f"Manual STK Query failed for Order {order.id}")
             return Response({'error': str(e)}, status=500)
+
+
+class CustomerPaymentAttemptStatusView(APIView):
+    permission_classes = [IsCustomer]
+    throttle_classes = [PaymentStatusThrottle]  # 🛡️ 30 requests/hour per user (Day 2)
+
+    def get(self, request, payment_id):
+        from .models import PaymentAttempt
+        cached = get_cached_status(request.user.id, payment_id)
+        if cached:
+            response = Response(cached)
+            response['Cache-Control'] = 'private, max-age=30' if cached.get('terminal') else 'private, max-age=2'
+            return response
+        attempt = get_object_or_404(
+            PaymentAttempt.objects.select_related('order', 'subscription_payment', 'shiriki_contribution'),
+            public_payment_id=payment_id,
+        )
+        owner_id = (
+            attempt.order.user_id if attempt.order_id else
+            attempt.shiriki_contribution.user_id if attempt.shiriki_contribution_id else
+            attempt.subscription_payment.store.owner_id
+        )
+        if owner_id != request.user.id:
+            return Response({'error': 'Payment not found'}, status=status.HTTP_404_NOT_FOUND)
+        target = attempt.order or attempt.shiriki_contribution or attempt.subscription_payment
+        payload = {
+            'payment_id': str(attempt.public_payment_id),
+            'status': attempt.status,
+            'amount': str(attempt.expected_amount),
+            'currency': attempt.currency,
+            'checkout_request_id': attempt.checkout_request_id,
+            'order_id': attempt.order_id,
+            'order_number': attempt.order.order_number if attempt.order_id else None,
+            'reference': attempt.order.order_number if attempt.order_id else str(target.pk),
+            'failure_code': attempt.failure_code,
+            'failure_message': attempt.failure_message,
+            'next_poll_after_seconds': next_poll_after(attempt),
+            'retry_after_seconds': retry_after(attempt),
+            'terminal': attempt.status in TERMINAL_PAYMENT_STATUSES,
+        }
+        cache_status(request.user.id, payment_id, payload, attempt.status)
+        response = Response(payload)
+        response['Cache-Control'] = 'private, max-age=30' if payload['terminal'] else 'private, max-age=2'
+        return response
 
 class OrderChatMessagesView(generics.ListCreateAPIView):
     serializer_class = ChatMessageSerializer
@@ -421,6 +493,8 @@ class OrderChatMessagesView(generics.ListCreateAPIView):
 
 class CustomerRetryPaymentView(APIView):
     permission_classes = [IsCustomer]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'payment_initiation'
 
     def post(self, request):
         order_number = request.data.get('order_number')
@@ -437,14 +511,6 @@ class CustomerRetryPaymentView(APIView):
 
         # 🛡️ IDEMPOTENCY GUARD: Prevent duplicate STK pushes within 2 minutes
         from django.core.cache import cache
-        lock_key = f"stk_push_lock_ord_{order.id}"
-        if cache.get(lock_key):
-            return Response({
-                'error': 'payment_in_progress',
-                'message': 'A payment request is already on your phone. Please check your M-Pesa prompt.',
-                'checkout_request_id': order.mpesa_checkout_request_id
-            }, status=status.HTTP_409_CONFLICT)
-
         from .mpesa_utils import MpesaIntegration
         mpesa = MpesaIntegration(store=order.store)
         try:
@@ -465,20 +531,19 @@ class CustomerRetryPaymentView(APIView):
             is_production = str(os.environ.get('MPESA_PRODUCTION', 'false')).lower() == 'true'
             amount = int(order.total) if is_production else 1
             
-            stk_result = mpesa.initiate_stk_push(
-                phone_number=phone,
-                amount=amount,
-                account_reference=f"ORD-{order.order_number}",
-                transaction_desc=f"Retry Payment {order.order_number}"
-            )
-            
-            # --- ASYNC RETRY Logic ---
-            trigger_stk_push_task.delay(order.id, phone)
+            key = request.headers.get('Idempotency-Key') or request.data.get('idempotency_key')
+            attempt, _ = InitiatePaymentService.create_or_get_for_order(order, phone, key)
             
             return Response({
                 'message': 'Retry payment initiated. Please check your phone for the M-Pesa prompt.',
-                'is_async': True
+                'is_async': True,
+                'payment_id': str(attempt.public_payment_id),
+                'payment_status': attempt.status,
+                'checkout_request_id': attempt.checkout_request_id,
+                'idempotency_key': attempt.idempotency_key,
             })
+        except PaymentInitiationConflict as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_409_CONFLICT)
         except ValueError as ve:
             return Response({'error': str(ve)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -592,6 +657,8 @@ class ValidatePromotionView(APIView):
 
 class CustomerPlaceOrderView(APIView):
     permission_classes = [IsCustomer]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'payment_initiation'
 
     def post(self, request):
         # 🛡️ Age Verification Guard
@@ -616,6 +683,35 @@ class CustomerPlaceOrderView(APIView):
         items_data = data.get('items', [])
         if not items_data:
             return Response({'error': 'Cart is empty'}, status=status.HTTP_400_BAD_REQUEST)
+
+        request_key = request.headers.get('Idempotency-Key') or data.get('idempotency_key')
+        try:
+            validate_idempotency_key(request_key)
+        except ValueError as exc:
+            return Response({'error': 'invalid_idempotency_key', 'message': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        request_fingerprint = order_request_fingerprint(data) if request_key else None
+        if request_key:
+            existing_order = Order.objects.filter(payment_idempotency_key=request_key).first()
+            if existing_order:
+                if existing_order.user_id != request.user.id:
+                    return Response({'error': 'idempotency_key_conflict'}, status=status.HTTP_409_CONFLICT)
+                if existing_order.idempotency_fingerprint and existing_order.idempotency_fingerprint != request_fingerprint:
+                    return Response({'error': 'idempotency_key_payload_conflict'}, status=status.HTTP_409_CONFLICT)
+                attempt = existing_order.payment_attempts.order_by('-created_at').first()
+                response_data = OrderSerializer(existing_order).data
+                if not attempt and existing_order.payment_method == 'mpesa' and existing_order.total > 0:
+                    attempt, _ = InitiatePaymentService.create_or_get_for_order(
+                        existing_order, data.get('mpesa_phone') or request.user.phone, request_key
+                    )
+                if attempt:
+                    response_data.update({
+                        'payment_id': str(attempt.public_payment_id),
+                        'payment_status': attempt.status,
+                        'checkout_request_id': attempt.checkout_request_id,
+                        'idempotency_key': attempt.idempotency_key,
+                        'is_async': True,
+                    })
+                return Response(response_data, status=status.HTTP_200_OK)
 
         try:
             with transaction.atomic():
@@ -663,7 +759,10 @@ class CustomerPlaceOrderView(APIView):
                     requested_quantity = item.get('quantity', 1)
                     
                     # 🛡️ Stock Validation: Only charge for what is in stock
-                    actual_quantity = min(requested_quantity, food_item.stock)
+                    requested_quantity = int(requested_quantity)
+                    if requested_quantity <= 0:
+                        return Response({'error': 'Invalid item quantity.'}, status=status.HTTP_400_BAD_REQUEST)
+                    actual_quantity = requested_quantity
                     
                     if actual_quantity <= 0:
                         continue # Skip items that went out of stock
@@ -681,6 +780,7 @@ class CustomerPlaceOrderView(APIView):
 
                 # Handle Promotion
                 promo_code = data.get('promo_code')
+                promo = None
                 discount_amount = 0
                 if promo_code:
                     from django.utils import timezone
@@ -693,22 +793,11 @@ class CustomerPlaceOrderView(APIView):
                     ).first()
 
                     if promo:
-                        # Check usage limit
-                        if not promo.usage_limit or promo.times_used < promo.usage_limit:
-                            # Check min order
-                            if subtotal >= float(promo.min_order_amount):
-                                if promo.discount_percentage:
-                                    discount_amount = float(subtotal) * (float(promo.discount_percentage) / 100)
-                                elif promo.discount_amount:
-                                    discount_amount = float(promo.discount_amount)
-                                
-                                # Increment usage
-                                promo.times_used = F('times_used') + 1
-                                promo.save()
-                            else:
-                                logger.warning(f"Promo {promo_code} skipped: Subtotal {subtotal} < min {promo.min_order_amount}")
-                        else:
-                            logger.warning(f"Promo {promo_code} skipped: Usage limit reached")
+                        from .promotion_service import PromotionReservationService
+                        promo, discount_amount = PromotionReservationService.reserve(
+                            promo.id, Decimal(str(subtotal))
+                        )
+                        discount_amount = float(discount_amount)
                     else:
                         logger.warning(f"Invalid promo code provided: {promo_code}")
 
@@ -727,19 +816,23 @@ class CustomerPlaceOrderView(APIView):
                 
                 # 👛 Tipsy Wallet Logic
                 wallet_used = 0
-                if data.get('use_wallet') and user.wallet_balance > 0:
+                if data.get('use_wallet'):
+                    from .ledger_service import FinancialLedgerService
+                    from .models import WalletLedger
+                    user.refresh_from_db(fields=['wallet_balance'])
                     available_wallet = float(user.wallet_balance)
+                if data.get('use_wallet') and available_wallet > 0:
                     if available_wallet >= total:
                         wallet_used = total
                         total = 0
-                        user.wallet_balance = available_wallet - wallet_used
                     else:
                         wallet_used = available_wallet
                         total = total - wallet_used
-                        user.wallet_balance = 0
-                    
-                    user.save(update_fields=['wallet_balance'])
-                    logger.info(f"User {user.username} used KSh {wallet_used} from wallet. New balance: {user.wallet_balance}")
+                    FinancialLedgerService.wallet_entry(
+                        user.id, WalletLedger.EntryType.DEBIT, wallet_used,
+                        'order_wallet_debit', request_key or uuid.uuid4(),
+                        f'order-wallet-{request_key or uuid.uuid4()}',
+                    )
 
                 if total < 0: total = 0
 
@@ -751,6 +844,8 @@ class CustomerPlaceOrderView(APIView):
                 initial_status = 'pending'
                 if data.get('payment_method') == 'mpesa' and total > 0:
                     initial_status = 'payment_pending'
+
+                idempotency_key = request_key
 
                 order = Order.objects.create(
                     user=request.user,
@@ -768,8 +863,25 @@ class CustomerPlaceOrderView(APIView):
                     wallet_used=wallet_used,
                     payment_status='paid' if total == 0 else 'pending', # Auto-pay if wallet covered everything
                     payment_method=data.get('payment_method', 'mpesa'),
-                    requires_rider_verification=requires_verification
+                    requires_rider_verification=requires_verification,
+                    payment_idempotency_key=idempotency_key,
+                    idempotency_fingerprint=request_fingerprint,
                 )
+
+                from .inventory_service import InventoryReservationService
+                InventoryReservationService.reserve_order(
+                    order,
+                    [(item.food_item_id, item.quantity) for item in order_items_to_create],
+                )
+
+                if promo and discount_amount > 0:
+                    from .models import PromotionRedemption
+                    PromotionRedemption.objects.create(
+                        promotion=promo,
+                        order=order,
+                        code=promo.code,
+                        discount_amount=Decimal(str(discount_amount)),
+                    )
 
                 for item in order_items_to_create:
                     item.order = order
@@ -791,25 +903,55 @@ class CustomerPlaceOrderView(APIView):
                 
                 raw_phone = data.get('mpesa_phone') or request.user.phone
                 
-                # Update order with the phone used (for tracking)
-                # Note: tasks will re-format it
-                order.phone_number = raw_phone 
-                order.save(update_fields=['phone_number'])
-                
-                # Offload to Celery Queue (Fire and Forget)
-                trigger_stk_push_task.delay(order.id, raw_phone)
+                attempt, _ = InitiatePaymentService.create_or_get_for_order(
+                    order, raw_phone, idempotency_key
+                )
                 
                 response_data['message'] = "Payment processing started. Please look out for the M-Pesa prompt."
                 response_data['is_async'] = True
+                response_data['payment_id'] = str(attempt.public_payment_id)
+                response_data['payment_status'] = attempt.status
+                response_data['checkout_request_id'] = attempt.checkout_request_id
+                response_data['idempotency_key'] = attempt.idempotency_key
 
             return Response(response_data, status=status.HTTP_201_CREATED)
 
+        except IntegrityError:
+            if request_key:
+                existing_order = Order.objects.filter(payment_idempotency_key=request_key).first()
+                if existing_order and existing_order.user_id == request.user.id:
+                    if existing_order.idempotency_fingerprint and existing_order.idempotency_fingerprint != request_fingerprint:
+                        return Response({'error': 'idempotency_key_payload_conflict'}, status=status.HTTP_409_CONFLICT)
+                    attempt = existing_order.payment_attempts.order_by('-created_at').first()
+                    if not attempt and existing_order.payment_method == 'mpesa' and existing_order.total > 0:
+                        attempt, _ = InitiatePaymentService.create_or_get_for_order(
+                            existing_order, data.get('mpesa_phone') or request.user.phone, request_key
+                        )
+                    response_data = OrderSerializer(existing_order).data
+                    if attempt:
+                        response_data.update({
+                            'payment_id': str(attempt.public_payment_id),
+                            'payment_status': attempt.status,
+                            'checkout_request_id': attempt.checkout_request_id,
+                            'idempotency_key': attempt.idempotency_key,
+                            'is_async': True,
+                        })
+                    return Response(response_data, status=status.HTTP_200_OK)
+                if existing_order:
+                    return Response({'error': 'idempotency_key_conflict'}, status=status.HTTP_409_CONFLICT)
+            logger.exception('Order idempotency conflict could not be recovered')
+            return Response({'error': 'order_conflict'}, status=status.HTTP_409_CONFLICT)
         except Exception as e:
+            from .inventory_service import InventoryConflict
+            if isinstance(e, InventoryConflict):
+                return Response({'error': 'out_of_stock', 'message': str(e)}, status=status.HTTP_409_CONFLICT)
             logger.exception(f"Order Creation Failed for user {request.user.username}")
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 class ShirikiCreateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'shiriki_session'
 
     def post(self, request):
         order_number = request.data.get('order_number')
@@ -821,20 +963,10 @@ class ShirikiCreateView(APIView):
         except Order.DoesNotExist:
             return Response({'error': 'Order not found or already paid'}, status=404)
             
-        if ShirikiSession.objects.filter(order=order).exists():
-            return Response({'error': 'Shiriki session already exists for this order'}, status=400)
-            
-        # Generate unique invite code
-        invite_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-        while ShirikiSession.objects.filter(invite_code=invite_code).exists():
-            invite_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-            
-        session = ShirikiSession.objects.create(
-            order=order,
-            host=request.user,
-            invite_code=f"TT-{invite_code}",
-            expires_at=timezone.now() + timezone.timedelta(minutes=30)
-        )
+        try:
+            session = ShirikiService.create_session(order.id, request.user.id)
+        except ShirikiSessionConflict as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_409_CONFLICT)
         
         return Response(ShirikiSessionSerializer(session).data, status=201)
 
@@ -851,6 +983,8 @@ class ShirikiSessionDetailView(APIView):
 
 class ShirikiContributeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'payment_initiation'
 
     def post(self, request):
         invite_code = request.data.get('invite_code')
@@ -859,6 +993,23 @@ class ShirikiContributeView(APIView):
 
         if not all([invite_code, amount, phone]):
             return Response({'error': 'Missing required fields'}, status=400)
+
+        request_key = request.headers.get('Idempotency-Key') or request.data.get('idempotency_key')
+        if request_key:
+            existing_contribution = ShirikiContribution.objects.filter(
+                user=request.user, payment_idempotency_key=request_key
+            ).first()
+            if existing_contribution:
+                attempt = existing_contribution.payment_attempts.order_by('-created_at').first()
+                return Response({
+                    'success': True,
+                    'contribution_id': existing_contribution.id,
+                    'payment_id': str(attempt.public_payment_id) if attempt else None,
+                    'payment_status': attempt.status if attempt else existing_contribution.status,
+                    'checkout_request_id': attempt.checkout_request_id if attempt else existing_contribution.checkout_request_id,
+                    'idempotency_key': request_key,
+                    'is_async': True,
+                }, status=200)
 
         try:
             amount = Decimal(str(amount))
@@ -881,8 +1032,9 @@ class ShirikiContributeView(APIView):
                 from django.utils import timezone
                 from datetime import timedelta
                 
-                recent_pending_cutoff = timezone.now() - timedelta(minutes=2)
-                
+                if session.contributions.filter(status='pending').count() >= ShirikiService.MAX_ACTIVE_PENDING_CONTRIBUTIONS:
+                    return Response({'error': 'This Shiriki pot has reached its pending payment limit'}, status=409)
+
                 # Sum of confirmed payments
                 confirmed_sum = session.contributions.filter(
                     status='confirmed'
@@ -890,8 +1042,7 @@ class ShirikiContributeView(APIView):
 
                 # Sum of pending payments that haven't timed out yet
                 pending_sum = session.contributions.filter(
-                    status='pending',
-                    created_at__gte=recent_pending_cutoff
+                    status='pending'
                 ).aggregate(Sum('amount'))['amount__sum'] or Decimal('0')
 
                 total_reserved = confirmed_sum + pending_sum
@@ -912,22 +1063,26 @@ class ShirikiContributeView(APIView):
                     user=request.user,
                     amount=amount,
                     phone_number=phone,
+                    payment_idempotency_key=request_key,
                     status='pending'
                 )
         except Exception:
             logger.exception("Error creating Shiriki contribution")
             return Response({'error': 'Something went wrong. Please try again.'}, status=500)
 
-        from .tasks import trigger_stk_push_task
-        trigger_stk_push_task.delay(
-            order_id=session.order.id,
-            mpesa_phone=phone,
-            contribution_id=contribution.id
-        )
+        key = request_key
+        try:
+            attempt, _ = InitiatePaymentService.create_or_get_for_contribution(contribution, phone, key)
+        except PaymentInitiationConflict as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_409_CONFLICT)
 
         return Response({
             'success': True,
             'contribution_id': contribution.id,
             'message': f'Contribution of KSh {amount} initiated. Please enter your PIN.',
-            'is_async': True
+            'is_async': True,
+            'payment_id': str(attempt.public_payment_id),
+            'payment_status': attempt.status,
+            'checkout_request_id': attempt.checkout_request_id,
+            'idempotency_key': attempt.idempotency_key,
         })

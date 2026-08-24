@@ -1,0 +1,454 @@
+TipsyTheoryy High-Concurrency and Race-Condition Hardening Plan
+===============================================================
+
+Objective
+---------
+Make TipsyTheoryy safe and measurable under high concurrency, including:
+
+  - 10,000 customers attempting to place orders concurrently.
+  - 10,000 independent Shiriki pots being opened concurrently.
+  - 10,000 contributors competing for capacity in one Shiriki pot.
+  - Large bursts of M-Pesa payment initiation, callbacks, polling, and
+    reconciliation.
+
+This plan targets correctness first, then throughput. A system that responds
+quickly while overselling stock, double-applying a ledger, or losing callbacks
+is not considered successful.
+
+Current confirmed risks
+-----------------------
+
+  1. Inventory is read without an atomic reservation/decrement.
+  2. Promotion usage validation and increment are not fully atomic.
+  3. Duplicate order requests can race before the idempotency lookup and may
+     return a generic error instead of the original order/payment response.
+  4. A single popular Shiriki pot becomes a hot PostgreSQL row.
+  5. 10,000 payment tasks can overwhelm Celery, Redis, database connections,
+     or Safaricom provider limits.
+  6. Payment polling can create a read-amplification problem.
+  7. PostgreSQL concurrency tests currently skip on SQLite.
+  8. Actual 10,000-user capacity has not yet been load-tested.
+
+Implementation rules
+--------------------
+
+  - PostgreSQL is mandatory for concurrency certification.
+  - Every financial/inventory mutation must be atomic and idempotent.
+  - Provider calls must not execute while holding database row locks.
+  - Backpressure is preferable to unbounded queues and timeouts.
+  - Load tests must run against isolated staging infrastructure.
+  - No production load test may use real customer money or production data.
+
+Phase H1 - Atomic inventory reservation
+----------------------------------------
+
+Objective: prevent overselling when many orders request the same product.
+
+Implementation:
+
+  1. Add a reservation strategy to the order transaction.
+  2. For each requested product, reserve stock using a conditional update:
+
+       UPDATE food_item
+       SET stock = stock - <quantity>
+       WHERE id = <id>
+         AND is_available = TRUE
+         AND stock >= <quantity>;
+
+  3. Continue only when the update affects exactly one row.
+  4. Create OrderItem records using the reserved quantity.
+  5. If any item cannot be reserved, roll back all reservations and return a
+     deterministic out-of-stock response.
+  6. Define the reservation lifecycle:
+     - reserve at order creation,
+     - release on payment failure/expiry/cancellation,
+     - finalize on confirmed payment/order acceptance.
+  7. Add an inventory movement/audit record or equivalent idempotent reference
+     for every reserve/release/finalize operation.
+  8. Ensure retries cannot release or reserve the same quantity twice.
+
+Concurrency tests:
+
+  - 100 requests competing for 5 units result in exactly 5 reserved units.
+  - A failed payment releases the reservation once.
+  - Duplicate payment failure does not release twice.
+  - Two different products reserve independently without deadlocks.
+
+Acceptance:
+
+  - Stock never becomes negative.
+  - Confirmed orders never exceed available stock.
+  - Failed/cancelled orders release stock exactly once.
+  - No deadlocks under concurrent multi-item orders.
+
+Status: IMPLEMENTED (2026-08-21)
+
+Implemented:
+
+  - Added `InventoryReservation` with unique order/product ownership and
+    reserved/released/finalized states.
+  - Added atomic deterministic row-lock reservation service.
+  - Order creation now reserves requested quantities before committing.
+  - Payment failure, amount mismatch, and reconciliation manual review release
+    reservations idempotently.
+  - Delivery finalizes reservations without deducting stock a second time.
+  - Added rollback, release-idempotency, and delivery-finalization tests.
+
+Verification:
+
+  - Django system checks passed.
+  - Migration `0068_inventoryreservation` generated.
+  - H1/payment tests passed: 13 tests, 4 PostgreSQL concurrency tests skipped
+    locally because SQLite is active.
+
+Phase H2 - Atomic promotion usage
+----------------------------------
+
+Objective: enforce promotion usage limits under concurrent orders.
+
+Implementation:
+
+  1. Lock or conditionally update the promotion row when applying a discount.
+  2. Use a single conditional update for usage reservation:
+
+       UPDATE promotion
+       SET times_used = times_used + 1
+       WHERE id = <id>
+         AND is_active = TRUE
+         AND (usage_limit IS NULL OR times_used < usage_limit);
+
+  3. Apply the discount only if the update succeeds.
+  4. Store an idempotent promotion-use reference tied to the order.
+  5. Release usage only if business rules require cancellation release.
+  6. Prevent a retry of the same order from consuming another promotion use.
+
+Tests:
+
+  - Usage limit 100 with 1,000 concurrent requests results in exactly 100 uses.
+  - Invalid/expired promotions never increment usage.
+  - Duplicate order idempotency key consumes one use.
+
+Status: IMPLEMENTED (2026-08-21)
+
+Implemented:
+
+  - Added `PromotionReservationService` with row locking and atomic usage
+    reservation.
+  - Added `PromotionRedemption` audit record with order uniqueness.
+  - Promotion usage and redemption now commit or roll back with order creation.
+  - Added tests for usage limits, minimum order behavior, and redemption
+    uniqueness.
+  - Added migration `0069_promotionredemption`.
+
+Verification:
+
+  - Django system checks passed.
+  - Migration consistency check passed.
+  - H2/promotion/inventory/payment tests passed: 12 tests.
+
+Phase H3 - Race-safe order idempotency
+--------------------------------------
+
+Objective: ensure concurrent duplicate order submissions return one result.
+
+Implementation:
+
+  1. Keep the unique database constraint on the order idempotency key.
+  2. Move idempotency resolution into the transaction boundary.
+  3. Handle `IntegrityError` for a conflicting idempotency key by retrieving
+     the committed original order and payment attempt.
+  4. Return the same order/payment response for both requests.
+  5. Reject reuse of a key by a different authenticated user with a safe
+     conflict response.
+  6. Validate that idempotency keys have a bounded length and acceptable format.
+  7. Define key retention/cleanup policy without deleting keys for active or
+     disputed payments.
+
+Tests:
+
+  - Two simultaneous identical requests create one Order.
+  - Both responses contain the same order ID and payment ID.
+  - Same key with different payload returns a conflict.
+  - Same key from another user cannot access the original order.
+  - Request retry after timeout returns the original result.
+
+Status: IMPLEMENTED (2026-08-21)
+
+Implemented:
+
+  - Added bounded idempotency-key validation.
+  - Added deterministic order request fingerprints.
+  - Same-key retries now resolve the original order and payment attempt.
+  - Same-key payload changes return a conflict.
+  - Same-key requests from another user return a conflict without disclosure.
+  - Concurrent unique-key `IntegrityError` races recover the committed order
+    instead of returning a generic failure.
+  - Added `Order.idempotency_fingerprint` and migration `0070`.
+  - Added fingerprint and database uniqueness tests.
+
+Verification:
+
+  - Django system checks passed.
+  - Migration consistency check passed.
+
+Phase H4 - Shiriki scaling and capacity reservation
+----------------------------------------------------
+
+Objective: preserve pot correctness while reducing hot-row contention.
+
+Independent pots:
+
+  1. Keep the one-to-one order/session constraint.
+  2. Replace random invite-code collision failure with bounded retry around the
+     unique constraint.
+  3. Add indexes for active session lookup and contribution status/created time.
+  4. Load-test 10,000 independent session creations.
+
+One hot pot:
+
+  1. Keep the current row lock as the correctness baseline.
+  2. Measure lock wait time and transaction latency.
+  3. Replace aggregate scanning with an atomic reservation total or capacity
+     ledger if lock wait exceeds the agreed SLA.
+  4. Reserve contribution capacity before initiating M-Pesa.
+  5. Release the reservation on failure/expiry exactly once.
+  6. Apply overflow to wallet through the existing idempotent ledger service.
+  7. Add a per-session rate limit and maximum active pending contribution count.
+
+Tests:
+
+  - 10,000 contributors cannot allocate more than order total.
+  - Exactly one overflow wallet credit is created where applicable.
+  - Duplicate contribution idempotency keys produce one contribution.
+  - Session remains consistent after worker restart and reconciliation.
+
+Status: IMPLEMENTED (2026-08-21)
+
+Implemented:
+
+  - Added `ShirikiService` as the session-creation and capacity-reservation
+    boundary.
+  - Session creation locks the order, preserves the one-to-one relationship,
+    and retries invite-code uniqueness conflicts a bounded number of times.
+  - Pending contributions reserve capacity until provider success, failure, or
+    reconciliation manual review; delayed callbacks cannot reclaim capacity.
+  - Added a maximum of 50 active pending contributions per pot and API throttling
+    for session creation.
+  - Added active-session and contribution-state indexes.
+  - Provider initiation failure and reconciliation manual review now release
+    pending Shiriki capacity exactly once by moving the contribution to `failed`.
+  - Added migration `0071`.
+
+Verification:
+
+  - Django system checks and migration consistency passed.
+  - Focused Shiriki reservation and payment tests passed.
+  - PostgreSQL load testing for 10,000 independent pots remains a staging
+    acceptance test; local SQLite cannot validate row-lock behavior.
+
+Phase H5 - Payment queue and provider backpressure
+--------------------------------------------------
+
+Objective: prevent 10,000 payment attempts from collapsing Redis, Celery, or
+Safaricom throughput.
+
+Implementation:
+
+  1. Define maximum provider initiation rate based on Safaricom limits.
+  2. Separate payment initiation, reconciliation, and notification queues.
+  3. Configure Celery worker concurrency and prefetch deliberately.
+  4. Add bounded retry with exponential backoff and jitter.
+  5. Add queue-depth and task-age metrics.
+  6. Reject or defer new payment initiation when the provider queue exceeds a
+     safe threshold.
+  7. Return a clear `provider_unavailable` or `queued` state rather than
+     blocking the HTTP request.
+  8. Ensure one PaymentAttempt maps to at most one provider initiation call.
+  9. Use provider circuit-breaker behavior during sustained failures.
+  10. Keep reconciliation capacity separate from new initiation capacity so
+      lost callbacks can still be recovered during an initiation spike.
+
+Acceptance:
+
+  - HTTP latency remains bounded while payment tasks queue.
+  - Provider failures do not cause retry storms.
+  - Reconciliation continues during provider initiation pressure.
+  - Queue depth alerts fire before customer-visible failure becomes widespread.
+
+Status: IMPLEMENTED (2026-08-21)
+
+Implemented:
+
+  - Added Redis-backed provider admission control with configurable per-minute
+    initiation rate and queue-depth limits.
+  - Added a provider circuit breaker for repeated provider-unavailable, timeout,
+    and provider errors.
+  - Added bounded exponential retry with jitter for queue/task failures and a
+    periodic requeue task for deferred pending attempts.
+  - Separated Celery queues into `payment_initiation`,
+    `payment_reconciliation`, and `payment_notifications`.
+  - Configured late acknowledgements, worker-lost rejection, prefetch multiplier
+    one, and task-start tracking for payment workers.
+  - Added provider queue depth and deferral/circuit metrics.
+  - Preserved the one-provider-call guard: an attempt with a persisted checkout
+    request is never sent to Safaricom again.
+  - Stale `INITIATING` attempts are now moved to manual review by the
+    reconciliation queue instead of being retried against the provider.
+
+Verification:
+
+  - Django system checks and migration consistency passed.
+  - H5/backpressure and payment initiation/reconciliation tests passed.
+  - Redis-backed behavior and provider throughput limits still require staging
+    verification against Railway Redis and the approved Safaricom rate limit.
+
+Phase H6 - Polling and status-read scaling
+------------------------------------------
+
+Objective: prevent clients from overwhelming payment status endpoints.
+
+Implementation:
+
+  1. Honor server-provided polling intervals and retry-after values.
+  2. Increase polling intervals over time for long-pending payments.
+  3. Add per-payment and per-user status polling limits.
+  4. Cache non-terminal status briefly where safe, without caching ownership
+     across stores/users.
+  5. Stop polling immediately for terminal states.
+  6. Prefer push/event notification for future clients where available.
+  7. Monitor status endpoint request rate and p95 latency.
+
+Status: IMPLEMENTED (2026-08-21)
+
+Implemented:
+
+  - Added adaptive `next_poll_after_seconds` values based on payment age.
+  - Added explicit `terminal` response fields so clients can stop polling
+    immediately after confirmation, failure, expiry, manual review, overpayment,
+    or refund-required states.
+  - Added per-user and per-payment throttling to customer and merchant payment
+    attempt status endpoints.
+  - Added ownership-scoped short-lived caching: two seconds for active payment
+    states and thirty seconds for terminal states.
+  - Added private cache-control headers and preserved existing response fields.
+  - Added a sixty-second retry hint for manual-review states.
+
+Verification:
+
+  - Django system checks and migration consistency passed.
+  - Focused status/throttling tests pass.
+  - Redis cache behavior and status endpoint p95 still require staging load
+    verification with Railway Redis.
+
+Phase H7 - Database and infrastructure capacity
+------------------------------------------------
+
+Objective: size the platform for measured concurrency.
+
+Measure and tune:
+
+  - PostgreSQL max connections and application pool size.
+  - Web worker count and request timeout.
+  - Celery worker count/concurrency/prefetch.
+  - Redis memory, CPU, latency, and queue depth.
+  - PostgreSQL CPU, I/O, locks, slow queries, and deadlocks.
+  - API gateway/load-balancer connection limits.
+  - Safaricom provider throughput and timeout behavior.
+
+Required indexes to review with `EXPLAIN ANALYZE`:
+
+  - Order idempotency key.
+  - PaymentAttempt idempotency/status/checkout.
+  - ShirikiSession invite code/status.
+  - ShirikiContribution session/status/created time.
+  - Promotion store/code/activity.
+  - Outbox and callback inbox status/next-attempt fields.
+
+Status: IMPLEMENTED (2026-08-21)
+
+Implemented:
+
+  - Added configurable PostgreSQL connection lifetime and connection timeout
+    settings with health checks enabled.
+  - Added Celery worker concurrency, child recycling, task time limits, broker
+    visibility timeout, and result expiry settings.
+  - Added Redis socket connect/read timeouts and retry-on-timeout behavior.
+  - Added composite indexes for payment queue/reconciliation scans, callback
+    retries, and promotion lookup/activity filters; existing payment, Shiriki,
+    outbox, and inventory indexes were retained.
+  - Added a restricted infrastructure snapshot to the operations metrics
+    endpoint, including PostgreSQL connection counts when PostgreSQL is active,
+    Celery capacity settings, Redis presence, and payment queues.
+
+Verification:
+
+  - Django system checks passed.
+  - Migration consistency passed with migration `0072`.
+  - Infrastructure snapshot and full regression tests pass.
+  - Actual PostgreSQL sizing, Redis memory/latency, Celery worker concurrency,
+    and `EXPLAIN ANALYZE` measurements remain staging acceptance work.
+
+Phase H8 - Load and failure certification
+------------------------------------------
+
+Run in isolated staging PostgreSQL/Redis/Celery infrastructure:
+
+  1. Baseline: 100 requests/second for 10 minutes.
+  2. Ramp: 250, 500, 1,000 requests/second as infrastructure permits.
+  3. Burst: 10,000 order submissions with realistic payloads.
+  4. Burst: 10,000 independent Shiriki session creations.
+  5. Hotspot: 10,000 contributions to one Shiriki pot.
+  6. Payment burst: 10,000 asynchronous payment initiations with provider
+     calls mocked or sandbox-approved.
+  7. Callback burst: duplicate and delayed callbacks at peak rate.
+  8. Status burst: client polling at expected peak rate.
+  9. Failure injection: Redis outage, worker restart, database interruption,
+     provider timeout, callback loss.
+
+Required measurements:
+
+  - p50/p95/p99 HTTP latency.
+  - Error and timeout rate.
+  - PostgreSQL connection utilization.
+  - Lock wait/deadlock count.
+  - Redis latency/memory.
+  - Celery queue depth/task age.
+  - Provider initiation rate/failure rate.
+  - Callback and reconciliation latency.
+  - Duplicate financial effect count.
+  - Inventory oversell count.
+  - Promotion overuse count.
+
+Phase H9 - Controlled rollout
+-----------------------------
+
+  1. Deploy schema and code changes to staging.
+  2. Run unit and PostgreSQL concurrency tests.
+  3. Run load/failure certification.
+  4. Deploy to a small production allowlist.
+  5. Monitor for one agreed observation window.
+  6. Expand gradually only when all SLO and correctness gates pass.
+  7. Keep rollback and manual-review operations staffed.
+
+Final acceptance criteria
+-------------------------
+
+The high-concurrency improvements are complete only when:
+
+  - Inventory never oversells under concurrent orders.
+  - Promotion limits are never exceeded.
+  - Duplicate order requests return one authoritative order/payment result.
+  - Wallet, loyalty, and Shiriki balances remain correct under concurrency.
+  - PostgreSQL concurrency tests pass without skips.
+  - Provider queue/backpressure prevents retry storms.
+  - 10,000-user load results are documented with approved SLOs.
+  - Failure injection completes without duplicate financial effects.
+  - Rollback and manual-review procedures are tested.
+
+Non-goals
+---------
+
+  - This plan does not automatically implement refunds/reversals.
+  - This plan does not guarantee Safaricom acceptance of 10,000 simultaneous
+    STK pushes; provider limits must be measured and respected.
+  - This plan does not require a Flutter upgrade.

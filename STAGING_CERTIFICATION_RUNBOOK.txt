@@ -1,0 +1,233 @@
+TipsyTheoryy Phase 14 Staging Certification Runbook
+===================================================
+
+Purpose
+-------
+Certify the payment architecture in an environment that matches production:
+Railway PostgreSQL, managed Redis, separate Celery worker and beat services,
+real HTTPS callback networking, and Safaricom sandbox credentials.
+
+This is an execution runbook, not a local unit-test substitute. Do not mark
+Phase 14 passed from SQLite-only results.
+
+Required staging topology
+--------------------------
+
+  - Staging web service
+  - Staging PostgreSQL service
+  - Staging Redis service
+  - Staging Celery worker
+  - Staging Celery beat
+  - HTTPS API hostname reachable by Safaricom sandbox
+  - Flutter staging build
+  - Merchant staging build
+  - Safaricom sandbox application and callback registration
+
+Required staging variables
+--------------------------
+
+  DEBUG=False
+  DATABASE_URL=<staging PostgreSQL URL>
+  REDIS_URL=<staging Redis URL>
+  SECRET_KEY=<staging-only random value>
+  ENCRYPTION_KEY=<staging-only Fernet key>
+  ALLOWED_HOSTS=<staging API hosts>
+  TRUSTED_PROXY_IPS=<approved Railway proxy values>
+  MPESA_PRODUCTION=False
+  MPESA_CALLBACK_URL=https://<staging-api>/api/v1/billing/callback/
+  MPESA_CONSUMER_KEY=<Safaricom sandbox value>
+  MPESA_CONSUMER_SECRET=<Safaricom sandbox value>
+  MPESA_PASSKEY=<Safaricom sandbox value>
+  MPESA_SHORTCODE=<Safaricom sandbox shortcode>
+
+Never reuse production database, Redis, JWT, Fernet, or M-Pesa credentials in
+staging.
+
+1. Preflight evidence
+---------------------
+
+Run on the staging web service:
+
+  python manage.py check --deploy
+  python manage.py check
+  python manage.py migrate --plan
+  python manage.py showmigrations urbanfoods
+
+Expected:
+
+  - No unapplied migrations.
+  - No deployment security warnings.
+  - PostgreSQL is the active database engine.
+  - Redis is reachable from web, worker, and beat services.
+
+Verify Celery registration and schedules:
+
+  celery -A config.celery inspect ping
+  celery -A config.celery inspect registered
+
+Confirm these beat schedules are active:
+
+  - `urbanfoods.tasks.reconcile_pending_mpesa_payments`
+  - `urbanfoods.tasks.dispatch_outbox_events`
+
+Record deployment IDs, commit SHA, migration version, and service health.
+
+2. Baseline and observability
+-----------------------------
+
+Before payments, capture:
+
+  GET /api/v1/ops/payment-metrics/
+
+Use a superadmin/operator token. Record metric and database values. Configure
+alerts for callback backlog, outbox backlog, pending age, reconciliation
+failures, duplicate initiation, provider failures, and Redis/Celery failures.
+
+3. Payment certification scenarios
+----------------------------------
+
+For every scenario record:
+
+  - Scenario ID
+  - UTC timestamp
+  - User/store/order/payment ID
+  - Checkout request ID (redacted in shared evidence)
+  - Expected result
+  - Observed result
+  - Receipt and ledger references
+  - Relevant logs/metrics
+
+SC-01 Successful order payment
+  Initiate one sandbox order payment and complete the STK prompt.
+  Pass when exactly one PaymentAttempt is confirmed, the order is paid,
+  exactly one loyalty/ledger effect exists, and one outbox event is processed.
+
+SC-02 Failed order payment
+  Cancel or fail the STK prompt.
+  Pass when the attempt/order are failed once, no loyalty or wallet credit is
+  created, and the failure is visible to the customer.
+
+SC-03 Lost callback and reconciliation
+  Initiate a payment, temporarily block/drop the callback, then allow the
+  scheduled reconciliation task to query Safaricom.
+  Pass when reconciliation confirms the same PaymentAttempt without creating a
+  second financial effect.
+
+SC-04 Duplicate callback
+  Replay the identical callback payload twice.
+  Pass when both requests are safely acknowledged, but confirmation, receipt,
+  ledger, loyalty, and outbox effects occur once.
+
+SC-05 Duplicate initiation
+  Double-submit the same idempotency key concurrently.
+  Pass when one payment attempt and one provider STK request exist.
+
+SC-06 Subscription payment
+  Pay a subscription from the merchant panel.
+  Pass when the subscription activates only after confirmed payment and the
+  merchant resumes the same payment after browser refresh.
+
+SC-07 Shiriki contribution and overflow
+  Run two concurrent contributions against a partially funded session.
+  Pass when the pot receives only its remaining capacity and overflow is
+  credited once to the contributor wallet.
+
+SC-08 Wallet and manual refund/reversal path
+  Exercise wallet debit and the documented manual refund/reversal workflow.
+  Pass when wallet balance cannot go negative and the manual review trail is
+  complete. Automated refunds/reversals are not currently implemented.
+
+SC-09 Customer app restart
+  Kill/restart the Flutter app while payment is pending.
+  Pass when it resumes by payment ID and reaches the authoritative terminal
+  state without a duplicate STK request.
+
+SC-10 Merchant browser restart
+  Refresh/close/reopen the merchant panel while payment is pending.
+  Pass when local payment state resumes, delayed callback updates the panel,
+  and timed-out/manual-review attempts remain visible.
+
+SC-11 Worker restart during processing
+  Stop a Celery worker during callback/outbox processing and restart it.
+  Pass when the durable attempt/outbox record is retried or reconciled without
+  duplicate financial effects.
+
+SC-12 Redis outage and recovery
+  Temporarily make Redis unavailable.
+  Pass when payment correctness remains database-authoritative, the failure is
+  observable, and queued work recovers after Redis returns. Document which
+  non-critical metrics were lost during the outage.
+
+SC-13 Database connection interruption
+  Interrupt one worker/database connection during a payment transaction.
+  Pass when the transaction rolls back cleanly and reconciliation/retry can
+  complete the payment later.
+
+SC-14 Provider timeout/unavailable
+  Simulate provider timeout or invalid sandbox response.
+  Pass when the attempt reaches a safe failure/pending/manual-review state,
+  credentials are not logged, and retry policy is bounded.
+
+4. Load and concurrency certification
+--------------------------------------
+
+Run against staging PostgreSQL and Redis, never production:
+
+  - Concurrent order initiation at expected peak rate.
+  - Concurrent duplicate callbacks.
+  - Payment status polling at expected peak rate.
+  - Multiple reconciliation workers.
+  - Outbox backlog growth and recovery.
+
+Required measurements:
+
+  - p50/p95 payment confirmation latency.
+  - STK initiation success/failure rate.
+  - Duplicate attempt count.
+  - Callback inbox backlog and oldest age.
+  - Reconciliation backlog and manual-review count.
+  - Outbox retry/dead-letter count.
+  - PostgreSQL lock/error rate.
+  - Redis/Celery task failure rate.
+
+5. Rollback drill
+------------------
+
+1. Take and identify a staging PostgreSQL backup.
+2. Deploy the previous known-good application version.
+3. Verify the previous version can read existing PaymentAttempt and callback
+   records.
+4. Process an already-pending payment through the rollback version.
+5. Restore the new version and reconcile all attempts created during the drill.
+6. Confirm no duplicate ledger, wallet, loyalty, subscription, or outbox effect.
+
+6. Exit decision
+----------------
+
+PASS only when:
+
+  - All SC-01 through SC-14 critical scenarios pass.
+  - PostgreSQL concurrency tests pass without skips.
+  - No duplicate financial effects occur.
+  - No callback is permanently lost.
+  - Every payment is traceable by payment ID, checkout ID, receipt, and ledger.
+  - Metrics, logs, dashboards, and alerts work.
+  - Worker/Redis/database/provider failures recover safely.
+  - Rollback drill succeeds.
+  - Support and incident escalation contacts are available.
+
+FAIL/hold release for any duplicate charge effect, lost callback, incorrect
+ledger/wallet/loyalty balance, unauthorized status access, unbounded retry,
+missing alert, or failed rollback.
+
+Current local preflight status
+------------------------------
+
+The current workspace is not a Phase 14 staging environment:
+
+  - SQLite is active because `DATABASE_URL` is not set.
+  - `MPESA_PRODUCTION=False` and no real staging callback networking is active.
+  - The PostgreSQL concurrency tests are skipped by design.
+  - Railway service, Redis, Celery, and Safaricom sandbox evidence is pending.
+
+Therefore local tests cannot be used to declare Phase 14 certified.
