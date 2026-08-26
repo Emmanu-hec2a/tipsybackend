@@ -5,6 +5,7 @@ from rest_framework.views import APIView
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 import os
+import uuid
 from django.shortcuts import get_object_or_404
 from django.core.cache import cache
 from django.db.models import Q, F, ExpressionWrapper, DecimalField, FloatField, Avg, Exists, OuterRef, Value, BooleanField, Count

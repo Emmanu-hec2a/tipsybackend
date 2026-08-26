@@ -156,8 +156,15 @@ class PhoneNumberValidator:
             return False, error, remaining
         
         # Increment and set expiration
-        cache.incr(cache_key, 1)
-        cache.expire(cache_key, 3600)  # 1 hour expiration
+        # Use set() if key doesn't exist, then increment
+        try:
+            cache.incr(cache_key, 1)
+        except ValueError:
+            # Key doesn't exist in Redis, set it to 1
+            cache.set(cache_key, 1, 3600)
+        else:
+            # Key exists, just set expiration
+            cache.expire(cache_key, 3600)  # 1 hour expiration
         
         remaining = MAX_STK_PUSHES_PER_HOUR - (current_count + 1)
         
