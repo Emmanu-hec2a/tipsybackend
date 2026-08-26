@@ -86,8 +86,13 @@ class Command(BaseCommand):
             self.stdout.write(f"     Status: {attempt.status}")
             self.stdout.write(f"     Checkout Request ID: {attempt.checkout_request_id}")
             self.stdout.write(f"     Created: {attempt.created_at}")
-            if attempt.error_response:
-                self.stdout.write(f"     Error: {attempt.error_response}")
+            if attempt.failure_code or attempt.failure_message:
+                self.stdout.write(f"     Failure Code: {attempt.failure_code}")
+                self.stdout.write(f"     Failure Message: {attempt.failure_message}")
+            if attempt.raw_initiation_response:
+                self.stdout.write(f"     Initiation Response: {attempt.raw_initiation_response}")
+            if attempt.raw_callback_payload:
+                self.stdout.write(f"     Callback Payload: {attempt.raw_callback_payload}")
 
         if not payment_attempts.exists() and order.total > 0 and order.payment_method == 'mpesa':
             self.stdout.write(self.style.ERROR(f"  🔴 BUG: No payment attempts created despite needing STK push!"))
