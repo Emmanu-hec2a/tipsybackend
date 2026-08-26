@@ -685,6 +685,15 @@ class CustomerPlaceOrderView(APIView):
         if not items_data:
             return Response({'error': 'Cart is empty'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # 🛡️ Lock Cash on Delivery - Only M-Pesa or Wallet allowed
+        payment_method = data.get('payment_method', 'mpesa')
+        if payment_method == 'cod':
+            return Response({
+                'error': 'payment_method_not_available',
+                'message': 'Cash on Delivery is currently unavailable. Please use M-Pesa or Wallet to complete your order.',
+                'available_methods': ['mpesa', 'wallet']
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         request_key = request.headers.get('Idempotency-Key') or data.get('idempotency_key')
         try:
             validate_idempotency_key(request_key)
