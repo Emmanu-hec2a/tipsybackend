@@ -900,20 +900,29 @@ class CustomerPlaceOrderView(APIView):
 
             # --- ASYNC CHECKOUT Logic (High-Concurrency Ready) ---
             if order.payment_method == 'mpesa' and order.total > 0 and not is_shiriki:
-                logger.info(f"Queuing STK Push Task for Order {order.order_number}")
+                logger.info(f"Queuing STK Push Task for Order {order.order_number}, User {request.user.id}")
                 
                 raw_phone = data.get('mpesa_phone') or request.user.phone
+                logger.info(f"STK Phone: {raw_phone}, Idempotency Key: {idempotency_key}")
                 
-                attempt, _ = InitiatePaymentService.create_or_get_for_order(
-                    order, raw_phone, idempotency_key
-                )
-                
-                response_data['message'] = "Payment processing started. Please look out for the M-Pesa prompt."
-                response_data['is_async'] = True
-                response_data['payment_id'] = str(attempt.public_payment_id)
-                response_data['payment_status'] = attempt.status
-                response_data['checkout_request_id'] = attempt.checkout_request_id
-                response_data['idempotency_key'] = attempt.idempotency_key
+                try:
+                    attempt, _ = InitiatePaymentService.create_or_get_for_order(
+                        order, raw_phone, idempotency_key
+                    )
+                    logger.info(f"✅ Payment attempt created: {attempt.public_payment_id}, status={attempt.status}, checkout_id={attempt.checkout_request_id}")
+                    
+                    response_data['message'] = "Payment processing started. Please look out for the M-Pesa prompt."
+                    response_data['is_async'] = True
+                    response_data['payment_id'] = str(attempt.public_payment_id)
+                    response_data['payment_status'] = attempt.status
+                    response_data['checkout_request_id'] = attempt.checkout_request_id
+                    response_data['idempotency_key'] = attempt.idempotency_key
+                except Exception as e:
+                    logger.error(f"❌ STK initiation failed for Order {order.order_number}: {type(e).__name__}: {str(e)}", exc_info=True)
+                    return Response(
+                        {'error': 'payment_initiation_failed', 'message': str(e)},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
 
             return Response(response_data, status=status.HTTP_201_CREATED)
 
