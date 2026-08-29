@@ -319,7 +319,6 @@ REST_FRAMEWORK = {
         'urbanfoods.rate_limiting.GlobalAuthenticatedThrottle', # 1000/hour per user
         'urbanfoods.rate_limiting.GlobalAnonymousThrottle',    # 100/hour per IP
         'urbanfoods.rate_limiting.GlobalIPThrottle',           # 10000/hour per IP
-        'urbanfoods.rate_limiting.ListEndpointThrottle',       # 30/hour (auth), 10/hour (anon)
     ],
     'DEFAULT_THROTTLE_RATES': {
         # Legacy rates (kept for backward compatibility, overridden by Redis throttles)
