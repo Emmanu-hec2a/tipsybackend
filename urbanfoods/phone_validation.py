@@ -64,16 +64,21 @@ class PhoneNumberValidator:
         Examples:
             ✓ +254712345678 (valid)
             ✓ +254712345678 (valid, with leading +)
-            ✗ 0712345678 (missing country code)
+            ✓ 0712345678 (local format)
+            ✓ 718258821 (9 digits, auto-adds 0 prefix)
+            ✓ 254712345678 (without +)
             ✗ +254812345678 (invalid carrier prefix 08)
             ✗ +254712345 (too short)
-            ✗ 254712345678 (missing +)
         """
         if not phone_number or not isinstance(phone_number, str):
             return False, "Phone number must be a non-empty string"
         
         # Clean up formatting
         cleaned = phone_number.strip()
+        
+        # Handle 9-digit format (missing leading 0): 718258821 → 0718258821
+        if len(cleaned) == 9 and cleaned[0] in ('7', '1'):
+            cleaned = '0' + cleaned
         
         # Handle local format (0712345678) by converting to E.164
         if cleaned.startswith('0') and len(cleaned) == 10:
@@ -105,6 +110,7 @@ class PhoneNumberValidator:
             
         Examples:
             0712345678 → +254712345678
+            718258821 → +254718258821
             254712345678 → +254712345678
             +254712345678 → +254712345678
         """
@@ -114,6 +120,11 @@ class PhoneNumberValidator:
         
         # Clean and normalize
         cleaned = phone_number.strip()
+        
+        # Handle 9-digit format (missing leading 0): 718258821 → 0718258821
+        if len(cleaned) == 9 and cleaned[0] in ('7', '1'):
+            cleaned = '0' + cleaned
+        
         if cleaned.startswith('0') and len(cleaned) == 10:
             cleaned = '254' + cleaned[1:]
         if not cleaned.startswith('+'):
