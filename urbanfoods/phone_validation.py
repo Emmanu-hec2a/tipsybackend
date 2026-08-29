@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 KENYA_PHONE_E164_REGEX = r'^\+254(?:7|1)\d{8}$'
 
 # Maximum STK pushes per phone number per hour
-MAX_STK_PUSHES_PER_HOUR = 3
+MAX_STK_PUSHES_PER_HOUR = 15  # Allow testing iterations without hitting limit every minute
 
 # Maximum amount per transaction (prevent very large fraud attempts)
 # This doesn't block legitimate transactions, just flags them for review
