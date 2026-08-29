@@ -66,6 +66,10 @@ class PartnerStoreMixin:
 class PartnerBaseView(PartnerStoreMixin):
     permission_classes = [IsPartner]
     authentication_classes = [SecureJWTAuthentication, authentication.SessionAuthentication]
+    # 🛡️ Disable rate limiting for partner dashboard
+    # Partners need unrestricted access to manage their stores without hitting rate limits
+    # Payment endpoints (MarketingBlastView, RevenueSharingView) have their own throttle_classes
+    throttle_classes = []
 
 class PartnerStatusView(APIView):
     permission_classes = [permissions.IsAuthenticated]
