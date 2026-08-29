@@ -295,7 +295,7 @@ class CustomerOrderDetailView(generics.RetrieveAPIView):
 
 class CustomerOrderPaymentStatusView(APIView):
     permission_classes = [IsCustomer]
-    throttle_classes = [PaymentStatusThrottle]  # 🛡️ 30 requests/hour per user (Day 2)
+    throttle_classes = [PaymentStatusThrottle]  # 🛡️ 300 requests/hour per user
 
     def get(self, request, pk):
         # 🛡️ SHIRIKI GUARD: Allow access for participants
@@ -383,7 +383,7 @@ class CustomerMpesaQueryView(APIView):
 
 class CustomerPaymentAttemptStatusView(APIView):
     permission_classes = [IsCustomer]
-    throttle_classes = [PaymentStatusThrottle]  # 🛡️ 30 requests/hour per user (Day 2)
+    throttle_classes = [PaymentStatusThrottle]  # 🛡️ 300 requests/hour per user
 
     def get(self, request, payment_id):
         from .models import PaymentAttempt

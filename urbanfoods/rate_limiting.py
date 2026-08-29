@@ -170,7 +170,7 @@ class PaymentStatusThrottle(throttling.BaseThrottle):
     """
     
     THROTTLE_RATES = {
-        'payment_status': '30/hour',  # 30 requests per hour per user
+        'payment_status': '300/hour',  # 300 requests per hour per user (5/min average)
     }
     
     def get_rate_limit_key(self, request) -> str:
@@ -209,10 +209,10 @@ class PaymentStatusThrottle(throttling.BaseThrottle):
         """
         key = self.get_rate_limit_key(request)
         
-        # 30 requests per hour (3600 seconds)
+        # 300 requests per hour (5 per minute average)
         is_limited, requests_used, ttl = _rate_limiter.is_rate_limited(
             key=key,
-            limit=30,
+            limit=300,
             window_seconds=3600,
             user_id=request.user.id if request.user.is_authenticated else None,
             ip_address=self._get_client_ip(request)
@@ -221,14 +221,14 @@ class PaymentStatusThrottle(throttling.BaseThrottle):
         # Store in request for response headers
         request.rate_limit_key = key
         request.rate_limit_requests_used = requests_used
-        request.rate_limit_remaining = max(0, 30 - requests_used)
+        request.rate_limit_remaining = max(0, 300 - requests_used)
         request.rate_limit_reset = ttl
         
         return not is_limited
     
     def throttle_exceeded_message(self) -> str:
         """Return error message."""
-        return "Payment status polling rate limit exceeded (30/hour)"
+        return "Payment status polling rate limit exceeded (300/hour)"
 
 
 class GlobalAuthenticatedThrottle(throttling.BaseThrottle):

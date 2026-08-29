@@ -325,7 +325,7 @@ REST_FRAMEWORK = {
         'merchant_blast': '3/minute',
         'payment_initiation': '5/minute',
         'shiriki_session': '30/minute',
-        'payment_status': '30/hour',          # Updated: was 60/minute
+        'payment_status': '300/hour',         # Increased from 30/hour for testing
         'payment_status_per_payment': '12/minute',
         'payment_query': '10/minute',
         'auth_login': '10/minute',
