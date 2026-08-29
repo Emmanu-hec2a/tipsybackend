@@ -316,7 +316,6 @@ REST_FRAMEWORK = {
     'DEFAULT_VERSION': 'v1',
     # 🛡️ Rate Limiting (Day 2: OWASP A1:2021 - Broken Access Control)
     'DEFAULT_THROTTLE_CLASSES': [
-        'urbanfoods.rate_limiting.PaymentStatusThrottle',      # 30/hour per user
         'urbanfoods.rate_limiting.GlobalAuthenticatedThrottle', # 1000/hour per user
         'urbanfoods.rate_limiting.GlobalAnonymousThrottle',    # 100/hour per IP
         'urbanfoods.rate_limiting.GlobalIPThrottle',           # 10000/hour per IP
