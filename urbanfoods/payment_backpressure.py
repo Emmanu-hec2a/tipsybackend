@@ -10,6 +10,9 @@ class PaymentBackpressure:
 
     RATE_WINDOW_SECONDS = 60
     FAILURE_WINDOW_SECONDS = 60
+    
+    # 🔧 Development mode: Set PAYMENT_BACKPRESSURE_DISABLED=true to bypass all checks
+    BACKPRESSURE_DISABLED = os.environ.get('PAYMENT_BACKPRESSURE_DISABLED', '').lower() in ('true', '1', 'yes')
 
     @classmethod
     def _int_env(cls, name, default):
@@ -20,15 +23,15 @@ class PaymentBackpressure:
 
     @classmethod
     def provider_rate_limit(cls):
-        return cls._int_env('MPESA_INITIATION_RATE_PER_MINUTE', 300)
+        return cls._int_env('MPESA_INITIATION_RATE_PER_MINUTE', 10000)  # Increased for development
 
     @classmethod
     def queue_limit(cls):
-        return cls._int_env('PAYMENT_INITIATION_QUEUE_LIMIT', 1000)
+        return cls._int_env('PAYMENT_INITIATION_QUEUE_LIMIT', 10000)  # Increased for development
 
     @classmethod
     def failure_threshold(cls):
-        return cls._int_env('MPESA_CIRCUIT_FAILURE_THRESHOLD', 5)
+        return cls._int_env('MPESA_CIRCUIT_FAILURE_THRESHOLD', 100)  # Increased for development
 
     @classmethod
     def circuit_timeout(cls):
@@ -47,6 +50,8 @@ class PaymentBackpressure:
 
     @classmethod
     def circuit_open(cls):
+        if cls.BACKPRESSURE_DISABLED:
+            return False
         try:
             return bool(cache.get('tipsy:mpesa:circuit:open'))
         except Exception:
@@ -54,6 +59,10 @@ class PaymentBackpressure:
 
     @classmethod
     def admit_provider_call(cls, attempt_id):
+        # 🔧 Development mode: Bypass all backpressure checks
+        if cls.BACKPRESSURE_DISABLED:
+            return True, None
+            
         if cls.circuit_open():
             return False, 'provider_circuit_open'
 
@@ -73,6 +82,8 @@ class PaymentBackpressure:
 
     @classmethod
     def record_provider_result(cls, result):
+        if cls.BACKPRESSURE_DISABLED:
+            return
         if result and result.get('success'):
             try:
                 cache.delete('tipsy:mpesa:circuit:failures')
