@@ -367,7 +367,7 @@ class ConfirmPaymentService:
             target.save(update_fields=['status'])
             create_outbox_event(
                 'payment.failed', 'payment_attempt', attempt.id,
-                {'user_id': target.user_id, 'payment_id': str(attempt.public_payment_id)}, attempt
+                {'user_id': target.user_id, 'payment_id': str(attempt.public_payment_id), 'reason': reason}, attempt
             )
             return target.user_id
         if isinstance(target, Order):
@@ -380,13 +380,16 @@ class ConfirmPaymentService:
             OrderStatusHistory.objects.create(order=target, status='cancelled', notes=f'Payment failed: {reason}')
             create_outbox_event(
                 'payment.failed', 'payment_attempt', attempt.id,
-                {'user_id': target.user_id, 'payment_id': str(attempt.public_payment_id)}, attempt
+                {
+                    'user_id': target.user_id, 'payment_id': str(attempt.public_payment_id),
+                    'order_id': target.id, 'order_number': target.order_number, 'reason': reason,
+                }, attempt
             )
             return target.user_id
         owner_id = target.store.owner_id
         create_outbox_event(
             'payment.failed', 'payment_attempt', attempt.id,
-            {'user_id': owner_id, 'payment_id': str(attempt.public_payment_id)}, attempt
+            {'user_id': owner_id, 'payment_id': str(attempt.public_payment_id), 'reason': reason}, attempt
         )
         return owner_id
 

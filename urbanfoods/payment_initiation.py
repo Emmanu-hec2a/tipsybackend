@@ -202,6 +202,7 @@ class InitiatePaymentService:
                 from .observability import increment_metric, log_payment_event
                 increment_metric('payment_initiation_total')
                 log_payment_event('payment_initiated', attempt, source='provider')
+                cls._notify_stk_sent(attempt, target)
                 return result
 
             attempt.status = PaymentAttempt.Status.FAILED
@@ -220,6 +221,7 @@ class InitiatePaymentService:
             increment_metric('payment_initiation_failure_total')
             log_payment_event('payment_initiation_failed', attempt, source='provider',
                               failure_code=attempt.failure_code)
+            cls._notify_stk_failed(attempt, target, attempt.failure_message)
             return result
 
     @staticmethod
@@ -229,6 +231,59 @@ class InitiatePaymentService:
         if attempt.subscription_payment_id:
             return attempt.subscription_payment
         return attempt.shiriki_contribution
+
+    @staticmethod
+    def _resolve_user_id(target):
+        if isinstance(target, Order):
+            return target.user_id
+        if isinstance(target, ShirikiContribution):
+            return target.user_id
+        if isinstance(target, SubscriptionPayment):
+            return target.store.owner_id
+        return None
+
+    @staticmethod
+    def _notify_stk_sent(attempt, target):
+        try:
+            from .tasks import send_lifecycle_notification_task
+            user_id = InitiatePaymentService._resolve_user_id(target)
+            if not user_id:
+                return
+            order_number = target.order_number if isinstance(target, Order) else None
+            send_lifecycle_notification_task.delay(
+                user_id, 'STK Push Sent 📲',
+                'Enter your M-Pesa PIN to complete payment.',
+                {
+                    'type': 'stk_sent',
+                    'payment_id': str(attempt.public_payment_id),
+                    'order_id': attempt.order_id,
+                    'order_number': order_number,
+                },
+            )
+        except Exception:
+            logger.exception('Failed to send STK sent notification for attempt %s', attempt.id)
+
+    @staticmethod
+    def _notify_stk_failed(attempt, target, reason):
+        try:
+            from .tasks import send_lifecycle_notification_task
+            user_id = InitiatePaymentService._resolve_user_id(target)
+            if not user_id:
+                return
+            order_number = target.order_number if isinstance(target, Order) else None
+            send_lifecycle_notification_task.delay(
+                user_id, 'Payment Failed ❌',
+                reason or 'We could not start your M-Pesa payment.',
+                {
+                    'type': 'stk_failed',
+                    'payment_id': str(attempt.public_payment_id),
+                    'order_id': attempt.order_id,
+                    'order_number': order_number,
+                },
+            )
+        except Exception:
+            logger.exception('Failed to send STK failed notification for attempt %s', attempt.id)
+
 
     @staticmethod
     def _send_to_provider(attempt, target):

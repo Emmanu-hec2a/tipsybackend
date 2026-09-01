@@ -78,15 +78,30 @@ def process_outbox_event(event_id):
             from .utils import notify_new_order, update_weekly_revenue_share
             notify_new_order(order)
             update_weekly_revenue_share(order)
+            if order.user_id:
+                send_fcm_notification(
+                    order.user, 'Payment Confirmed ✅',
+                    f'Your order #{order.order_number} is confirmed and being prepared.',
+                    {
+                        'type': 'payment_confirmed',
+                        'order_id': order.id,
+                        'order_number': order.order_number,
+                    },
+                )
         elif event.event_type == 'shiriki.progress':
             notify_shiriki_progress_task.run(
                 event.payload['session_id'], event.payload['contributor_id'], event.payload['amount']
             )
         elif event.event_type == 'payment.failed':
             send_lifecycle_notification_task.run(
-                event.payload['user_id'], 'Payment Problem',
-                'Your M-Pesa payment could not be completed.',
-                {'type': 'stk_failed', 'payment_id': event.payload['payment_id']},
+                event.payload['user_id'], 'Payment Failed ❌',
+                event.payload.get('reason') or 'Your M-Pesa payment could not be completed.',
+                {
+                    'type': 'stk_failed',
+                    'payment_id': event.payload['payment_id'],
+                    'order_id': event.payload.get('order_id'),
+                    'order_number': event.payload.get('order_number'),
+                },
             )
         elif event.event_type == 'subscription.confirmed':
             pass
