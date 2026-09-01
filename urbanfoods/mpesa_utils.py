@@ -175,6 +175,13 @@ class MpesaIntegration:
         if not access_token:
             return {'success': False, 'message': 'Authentication failed'}
 
+        # 🛡️ PCI DSS: Format phone to E.164 for M-Pesa API (+254XXXXXXXXX)
+        try:
+            formatted_phone = self.format_phone_number(phone_number)
+        except ValueError as e:
+            logger.error(f"Phone format error for STK push: {e}")
+            return {'success': False, 'message': f'Invalid phone number: {e}'}
+
         # 🛡️ Safaricom expects a specific timestamp format in Nairobi time (EAT)
         timestamp = timezone.localtime(timezone.now()).strftime('%Y%m%d%H%M%S')
         password = self.generate_password(timestamp)
@@ -189,9 +196,9 @@ class MpesaIntegration:
             "Timestamp": timestamp,
             "TransactionType": "CustomerPayBillOnline", # Works for both Paybill and Till in many cases
             "Amount": int(Decimal(str(amount))),
-            "PartyA": phone_number,
+            "PartyA": formatted_phone,
             "PartyB": self.shortcode,
-            "PhoneNumber": phone_number,
+            "PhoneNumber": formatted_phone,
             "CallBackURL": self.callback_url,
             "AccountReference": account_reference[:12],
             "TransactionDesc": transaction_desc[:13]
