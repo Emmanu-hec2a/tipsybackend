@@ -183,6 +183,9 @@ class MpesaIntegration:
             logger.error(f"Phone format error for STK push: {e}")
             return {'success': False, 'message': f'Invalid phone number: {e}'}
 
+        # Daraja API expects MSISDN without the leading "+" (e.g. 254712345678)
+        daraja_phone = formatted_phone.lstrip('+')
+
         # 🛡️ Safaricom expects a specific timestamp format in Nairobi time (EAT)
         timestamp = timezone.localtime(timezone.now()).strftime('%Y%m%d%H%M%S')
         password = self.generate_password(timestamp)
@@ -197,14 +200,14 @@ class MpesaIntegration:
             "Timestamp": timestamp,
             "TransactionType": "CustomerPayBillOnline", # Works for both Paybill and Till in many cases
             "Amount": int(Decimal(str(amount))),
-            "PartyA": formatted_phone,
+            "PartyA": daraja_phone,
             "PartyB": self.shortcode,
-            "PhoneNumber": formatted_phone,
+            "PhoneNumber": daraja_phone,
             "CallBackURL": self.callback_url,
             "AccountReference": account_reference[:12],
             "TransactionDesc": transaction_desc[:13]
         }
-        logger.info(f"STK Push Payload: PartyA={formatted_phone}, BusinessShortCode={self.shortcode}, Amount={int(Decimal(str(amount)))}")
+        logger.info(f"STK Push Payload: PartyA={daraja_phone}, BusinessShortCode={self.shortcode}, Amount={int(Decimal(str(amount)))}")
 
         headers = {
             "Authorization": f"Bearer {access_token}",
