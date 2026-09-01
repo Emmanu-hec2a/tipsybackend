@@ -15,10 +15,15 @@ class ReconciliationService:
     def claim_attempt(cls, attempt_id):
         now = timezone.now()
         with transaction.atomic():
-            attempt = PaymentAttempt.objects.select_for_update().select_related(
-                'order__store', 'subscription_payment__store',
-                'shiriki_contribution__session__order__store',
-            ).get(pk=attempt_id)
+            # Lock only PaymentAttempt (not the optional joins which cause PostgreSQL errors)
+            attempt = PaymentAttempt.objects.select_for_update(of=('self',)).get(pk=attempt_id)
+            # Fetch related objects separately to avoid nullable join issues with FOR UPDATE
+            if attempt.order_id:
+                attempt.order = attempt.order.__class__.objects.select_related('store').get(pk=attempt.order_id)
+            if attempt.subscription_payment_id:
+                attempt.subscription_payment = attempt.subscription_payment.__class__.objects.select_related('store').get(pk=attempt.subscription_payment_id)
+            if attempt.shiriki_contribution_id:
+                attempt.shiriki_contribution = attempt.shiriki_contribution.__class__.objects.select_related('session__order__store').get(pk=attempt.shiriki_contribution_id)
             if attempt.status != PaymentAttempt.Status.PENDING or not attempt.checkout_request_id:
                 return None
             if attempt.next_reconciliation_at and attempt.next_reconciliation_at > now:

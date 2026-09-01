@@ -64,7 +64,8 @@ class SafaricomIPWhitelist:
     @classmethod
     def get_allowed_ips(cls) -> list:
         """Get allowed IPs based on environment."""
-        if settings.DEBUG or not settings.IS_PRODUCTION:
+        is_production = str(getattr(settings, 'MPESA_PRODUCTION', 'False')).lower() == 'true'
+        if settings.DEBUG or not is_production:
             # Staging: Allow both production and staging IPs
             return cls.PRODUCTION_IPS + cls.STAGING_IPS
         else:
