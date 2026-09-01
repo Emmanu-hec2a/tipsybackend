@@ -316,11 +316,21 @@ class CustomerOrderPaymentStatusView(APIView):
             pk=pk
         )
         cache_key = f'tipsy:order-payment-status:{request.user.id}:{order.id}'
+        # 🛡️ Map order.payment_status -> PaymentAttempt-style status so the app's
+        # PaymentAttemptModel (shared with the /payments/<id>/ endpoint) parses
+        # 'status' consistently regardless of which endpoint served it.
+        payment_status_map = {
+            'paid': 'confirmed',
+            'pending': 'pending',
+            'failed': 'failed',
+            'cancelled': 'failed',
+        }
         payload = {
             'order_id': order.id,
             'order_number': order.order_number,
             'payment_status': order.payment_status,
-            'status': order.status,
+            'status': payment_status_map.get(order.payment_status, order.payment_status),
+            'order_status': order.status,
             'mpesa_checkout_request_id': order.mpesa_checkout_request_id,
             'terminal': order.payment_status in ('paid', 'failed', 'cancelled'),
             'next_poll_after_seconds': 5 if order.payment_status == 'pending' else None,
