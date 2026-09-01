@@ -47,12 +47,11 @@ class SafaricomIPWhitelist:
     """
     
     # Production IPs - Safaricom official M-Pesa production servers
+    # Kept in sync with SAFARICOM_IPS in views.py (safaricom_ip_required decorator)
     PRODUCTION_IPS = [
-        "196.201.214.0/24",    # Safaricom production - Primary
-        "196.201.213.0/24",    # Safaricom production - Secondary
-        "196.201.214.200",     # Specific production server
-        "196.201.214.201",     # Specific production server
-        "196.201.214.202",     # Specific production server
+        "196.201.212.0/24",    # Safaricom production - Range 1
+        "196.201.213.0/24",    # Safaricom production - Range 2
+        "196.201.214.0/24",    # Safaricom production - Range 3
     ]
     
     # Development/Staging IPs (if provided by Safaricom for testing)
