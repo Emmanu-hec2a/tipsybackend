@@ -166,13 +166,19 @@ def send_fcm_notification(user, title, body, data=None):
         return False
     
     try:
+        # 🛡️ FCM requires all `data` values to be strings; None/int/etc. raise errors
+        clean_data = {
+            str(key): str(value)
+            for key, value in (data or {}).items()
+            if value is not None
+        }
         # Construct message with platform-specific overrides for high priority
         message = messaging.Message(
             notification=messaging.Notification(
                 title=title,
                 body=body,
             ),
-            data=data or {},
+            data=clean_data,
             token=user.fcm_token,
             android=messaging.AndroidConfig(
                 priority='high',
