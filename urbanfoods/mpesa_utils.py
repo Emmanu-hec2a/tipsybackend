@@ -178,6 +178,7 @@ class MpesaIntegration:
         # 🛡️ PCI DSS: Format phone to E.164 for M-Pesa API (+254XXXXXXXXX)
         try:
             formatted_phone = self.format_phone_number(phone_number)
+            logger.info(f"✅ Phone formatted: {phone_number} → {formatted_phone}")
         except ValueError as e:
             logger.error(f"Phone format error for STK push: {e}")
             return {'success': False, 'message': f'Invalid phone number: {e}'}
@@ -203,6 +204,7 @@ class MpesaIntegration:
             "AccountReference": account_reference[:12],
             "TransactionDesc": transaction_desc[:13]
         }
+        logger.info(f"STK Push Payload: PartyA={formatted_phone}, BusinessShortCode={self.shortcode}, Amount={int(Decimal(str(amount)))}")
 
         headers = {
             "Authorization": f"Bearer {access_token}",
