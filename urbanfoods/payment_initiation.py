@@ -142,8 +142,12 @@ class InitiatePaymentService:
 
     @staticmethod
     def enqueue(attempt_id):
-        from .tasks import initiate_payment_attempt_task
-        initiate_payment_attempt_task.delay(attempt_id)
+        try:
+            from .tasks import initiate_payment_attempt_task
+            task_id = initiate_payment_attempt_task.delay(attempt_id)
+            logger.info(f"✅ Enqueued initiate_payment_attempt_task: attempt_id={attempt_id}, task_id={task_id.id}")
+        except Exception as e:
+            logger.exception(f"❌ Failed to enqueue payment task for attempt {attempt_id}: {e}")
 
     @classmethod
     def initiate_attempt(cls, attempt_id):
