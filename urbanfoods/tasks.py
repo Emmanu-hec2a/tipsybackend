@@ -92,6 +92,16 @@ def process_outbox_event(event_id):
             notify_shiriki_progress_task.run(
                 event.payload['session_id'], event.payload['contributor_id'], event.payload['amount']
             )
+            send_lifecycle_notification_task.run(
+                event.payload['contributor_id'], 'Contribution Confirmed ✅',
+                f"Your KSh {event.payload['amount']} contribution to the pot was confirmed.",
+                {
+                    'type': 'shiriki_contribution_confirmed',
+                    'session_id': event.payload['session_id'],
+                    'order_id': event.payload.get('order_id'),
+                    'order_number': event.payload.get('order_number'),
+                },
+            )
         elif event.event_type == 'payment.failed':
             send_lifecycle_notification_task.run(
                 event.payload['user_id'], 'Payment Failed ❌',

@@ -331,6 +331,8 @@ class ConfirmPaymentService:
                 'session_id': session.id,
                 'contributor_id': contribution.user_id,
                 'amount': str(amount),
+                'order_id': session.order_id,
+                'order_number': order.order_number,
             }, attempt
         )
         return order_id
