@@ -35,7 +35,7 @@ class ConfirmPaymentService:
     }
 
     @classmethod
-    def process_payment_signal(cls, checkout_request_id, result_code, result_desc, metadata, source='callback'):
+    def process_payment_signal(cls, checkout_request_id, result_code, result_desc, metadata, source='callback', client_ip=None):
         """Process one provider signal inside one locked database transaction."""
         if not checkout_request_id:
             return False
@@ -58,7 +58,7 @@ class ConfirmPaymentService:
                     increment_metric('payment_unmatched_total')
                     log_payment_event('payment_unmatched', source=source,
                                       checkout_request_id=checkout_request_id[-6:])
-                    logger.warning('Unmatched payment signal: %s', checkout_request_id)
+                    logger.warning('Unmatched payment signal: %s (client_ip=%s)', checkout_request_id, client_ip)
                     return False
 
                 previous_status = attempt.status
