@@ -322,8 +322,9 @@ def reconcile_pending_billing_payments():
     count = 0
     for payment in pending:
         try:
-            mpesa = MpesaIntegration(store=None) 
-            result = mpesa.query_stk_status(payment.checkout_request_id)
+            from .billing_utils import SubscriptionBilling
+            billing = SubscriptionBilling()
+            result = billing.query_stk_status(payment.checkout_request_id)
             if not result.get('success'): continue
             result_code = result.get('result_code')
             if result_code in (None, '4999'): continue
