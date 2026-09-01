@@ -1,4 +1,3 @@
-import requests
 import base64
 from datetime import datetime
 from decimal import Decimal
@@ -8,6 +7,7 @@ import logging
 from django.core.cache import cache
 from .models import PlatformConfig
 from .mpesa_utils import decrypt_value
+from .tls_pinning import create_safaricom_session
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +42,13 @@ class SubscriptionBilling:
             return None
 
         try:
-            response = requests.get(
-                self.access_token_url,
-                auth=(self.consumer_key, self.consumer_secret),
-                timeout=15
-            )
+            # 🛡️ PCI DSS 4.1: Certificate-pinned session for all M-Pesa API calls
+            with create_safaricom_session(is_production=self.is_production) as session:
+                response = session.get(
+                    self.access_token_url,
+                    auth=(self.consumer_key, self.consumer_secret),
+                    timeout=15
+                )
             response.raise_for_status()
             data = response.json()
             token = data['access_token']
@@ -99,12 +101,14 @@ class SubscriptionBilling:
         }
 
         try:
-            response = requests.post(
-                self.stk_push_url,
-                json=payload,
-                headers=headers,
-                timeout=20
-            )
+            # 🛡️ PCI DSS 4.1: Certificate-pinned session for all M-Pesa API calls
+            with create_safaricom_session(is_production=self.is_production) as session:
+                response = session.post(
+                    self.stk_push_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=20
+                )
             response.raise_for_status()
             result = response.json()
             if result.get("ResponseCode") == "0":
@@ -126,13 +130,15 @@ class SubscriptionBilling:
         timestamp = timezone.localtime(timezone.now()).strftime('%Y%m%d%H%M%S')
         password = base64.b64encode(f'{self.shortcode}{self.passkey}{timestamp}'.encode()).decode()
         try:
-            response = requests.post(
-                f'{self.base_url}/mpesa/stkpushquery/v1/query',
-                json={'BusinessShortCode': self.shortcode, 'Password': password,
-                      'Timestamp': timestamp, 'CheckoutRequestID': checkout_request_id},
-                headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'},
-                timeout=20,
-            )
+            # 🛡️ PCI DSS 4.1: Certificate-pinned session for all M-Pesa API calls
+            with create_safaricom_session(is_production=self.is_production) as session:
+                response = session.post(
+                    f'{self.base_url}/mpesa/stkpushquery/v1/query',
+                    json={'BusinessShortCode': self.shortcode, 'Password': password,
+                          'Timestamp': timestamp, 'CheckoutRequestID': checkout_request_id},
+                    headers={'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'},
+                    timeout=20,
+                )
             response.raise_for_status()
             result = response.json()
             return {
