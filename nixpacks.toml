@@ -16,4 +16,4 @@ PYTHONPATH = "/app"
 # Explicitly define the worker for Nixpacks
 [processes]
 web = "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT"
-worker = ". /opt/venv/bin/activate && celery -A config worker --loglevel=info"
+worker = ". /opt/venv/bin/activate && celery -A config worker --loglevel=info -Q payment_initiation,payment_reconciliation,payment_notifications,default"
