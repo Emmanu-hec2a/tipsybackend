@@ -30,6 +30,7 @@ from .permissions import IsCustomer, IsPartner, IsRider, IsSuperAdmin, SecureJWT
 from rest_framework.decorators import api_view
 import requests
 import os
+import ipaddress
 
 # ==================== HOMEPAGE & FOOD CATALOG ====================
 
@@ -691,9 +692,29 @@ def _get_client_ip(request):
     trusted_proxy_ips = getattr(settings, 'TRUSTED_PROXY_IPS', set())
     remote_addr = request.META.get('REMOTE_ADDR', '')
     forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if forwarded_for and remote_addr in trusted_proxy_ips:
+    if forwarded_for and _ip_is_trusted_proxy(remote_addr, trusted_proxy_ips):
         return forwarded_for.split(',')[0].strip()
     return remote_addr
+
+
+def _ip_is_trusted_proxy(remote_addr, trusted_proxy_ips):
+    """Check remote_addr against trusted entries, supporting both exact IPs and CIDR ranges."""
+    if not remote_addr:
+        return False
+    try:
+        remote_ip = ipaddress.ip_address(remote_addr)
+    except ValueError:
+        return False
+    for entry in trusted_proxy_ips:
+        try:
+            if '/' in entry:
+                if remote_ip in ipaddress.ip_network(entry, strict=False):
+                    return True
+            elif remote_ip == ipaddress.ip_address(entry):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def safaricom_ip_required(view_func):
