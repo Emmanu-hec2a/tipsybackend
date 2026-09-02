@@ -477,10 +477,12 @@ def notify_new_order(order):
 
 def notify_payment_received(order):
     customer_name = order.user.username if order.user else "N/A"
+    store_name = order.store.name if order.store else "N/A"
 
     message = f"""
 ✅ <b>PAYMENT CONFIRMED</b>
 
+🏪 Store: {store_name}
 📦 Order #{order.order_number}
 👤 {customer_name}
 💰 KES {order.total}
@@ -494,7 +496,7 @@ Status: Ready for delivery 🚀
             order.user.id, 
             "Payment Confirmed!", 
             f"Payment for order #{order.order_number} received.",
-            {'order_id': str(order.id), 'type': 'payment_confirmed'}
+            {'order_id': str(order.id), 'order_number': order.order_number, 'type': 'payment_confirmed'}
         )
 
     if order.store and order.store.telegram_chat_id:

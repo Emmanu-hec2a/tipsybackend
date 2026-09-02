@@ -330,6 +330,11 @@ REST_FRAMEWORK = {
         'payment_query': '10/minute',
         'auth_login': '10/minute',
         'rider_directions': '60/minute',   # ~1 route refresh every 10-15s of active navigation
+        # 🛡️ Tipsy Voice AI - protects paid third-party APIs (Whisper/OpenAI TTS) from cost abuse
+        'ai_voice_upload': '30/hour',
+        'ai_transcribe': '30/hour',
+        'ai_chat': '60/hour',
+        'ai_speak': '40/hour',
     },
 }
 

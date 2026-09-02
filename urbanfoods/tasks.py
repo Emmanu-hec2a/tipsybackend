@@ -75,44 +75,57 @@ def process_outbox_event(event_id):
     try:
         if event.event_type == 'order.confirmed':
             order = Order.objects.select_related('store', 'user').get(pk=event.payload['order_id'])
-            from .utils import notify_new_order, update_weekly_revenue_share
-            notify_new_order(order)
-            update_weekly_revenue_share(order)
-            if order.user_id:
-                send_fcm_notification(
-                    order.user, 'Payment Confirmed ✅',
-                    f'Your order #{order.order_number} is confirmed and being prepared.',
+            from .utils import notify_payment_received, update_weekly_revenue_share
+            from .notifications import send_customer_order_confirmation
+            # 🛡️ Isolate each side effect - a bug/outage in one (e.g. revenue
+            # share calc, Telegram, email) must never block the others.
+            try:
+                update_weekly_revenue_share(order)
+            except Exception:
+                logger.exception('update_weekly_revenue_share failed for order %s', order.id)
+            try:
+                notify_payment_received(order)
+            except Exception:
+                logger.exception('notify_payment_received failed for order %s', order.id)
+            if order.user and order.user.email:
+                try:
+                    send_customer_order_confirmation(order)
+                except Exception:
+                    logger.exception('send_customer_order_confirmation failed for order %s', order.id)
+        elif event.event_type == 'shiriki.progress':
+            try:
+                notify_shiriki_progress_task.run(
+                    event.payload['session_id'], event.payload['contributor_id'], event.payload['amount']
+                )
+            except Exception:
+                logger.exception('notify_shiriki_progress_task failed for event %s', event_id)
+            try:
+                send_lifecycle_notification_task.run(
+                    event.payload['contributor_id'], 'Contribution Confirmed ✅',
+                    f"Your KSh {event.payload['amount']} contribution to the pot was confirmed.",
                     {
-                        'type': 'payment_confirmed',
-                        'order_id': order.id,
-                        'order_number': order.order_number,
+                        'type': 'shiriki_contribution_confirmed',
+                        'session_id': event.payload['session_id'],
+                        'order_id': event.payload.get('order_id'),
+                        'order_number': event.payload.get('order_number'),
                     },
                 )
-        elif event.event_type == 'shiriki.progress':
-            notify_shiriki_progress_task.run(
-                event.payload['session_id'], event.payload['contributor_id'], event.payload['amount']
-            )
-            send_lifecycle_notification_task.run(
-                event.payload['contributor_id'], 'Contribution Confirmed ✅',
-                f"Your KSh {event.payload['amount']} contribution to the pot was confirmed.",
-                {
-                    'type': 'shiriki_contribution_confirmed',
-                    'session_id': event.payload['session_id'],
-                    'order_id': event.payload.get('order_id'),
-                    'order_number': event.payload.get('order_number'),
-                },
-            )
+            except Exception:
+                logger.exception('Contribution confirmed FCM failed for event %s', event_id)
         elif event.event_type == 'payment.failed':
-            send_lifecycle_notification_task.run(
-                event.payload['user_id'], 'Payment Failed ❌',
-                event.payload.get('reason') or 'Your M-Pesa payment could not be completed.',
-                {
-                    'type': 'stk_failed',
-                    'payment_id': event.payload['payment_id'],
-                    'order_id': event.payload.get('order_id'),
-                    'order_number': event.payload.get('order_number'),
-                },
-            )
+            try:
+                send_lifecycle_notification_task.run(
+                    event.payload['user_id'], 'Payment Failed ❌',
+                    event.payload.get('reason') or 'Your M-Pesa payment could not be completed.',
+                    {
+                        'type': 'stk_failed',
+                        'payment_id': event.payload['payment_id'],
+                        'order_id': event.payload.get('order_id'),
+                        'order_number': event.payload.get('order_number'),
+                    },
+                )
+            except Exception:
+                logger.exception('Payment failed FCM failed for event %s', event_id)
         elif event.event_type == 'subscription.confirmed':
             pass
         mark_outbox_processed(event.id)
@@ -546,3 +559,88 @@ def notify_shiriki_progress_task(session_id, contributor_id, amount):
                 {'type': 'shiriki_progress', 'session_id': str(session.id), 'current_amount': str(current_total), 'target_amount': str(session.order.total)})
     except Exception as e:
         logger.error(f"Error in notify_shiriki_progress_task: {e}")
+
+
+@shared_task
+def cleanup_temp_ai_audio(max_age_hours=24):
+    """
+    🛡️ Tipsy Voice AI: delete scratch voice-command/TTS-reply audio files
+    older than max_age_hours. These are transient (not order/user records)
+    and accumulate storage cost + retain raw voice recordings indefinitely
+    if left uncleaned.
+
+    Schedule via Django admin > Periodic Tasks (matches this project's
+    convention of DB-configured beat schedules), e.g. every 6 hours.
+    """
+    from django.core.files.storage import default_storage
+
+    cutoff = timezone.now() - timedelta(hours=max_age_hours)
+    deleted = 0
+    for prefix in ('temp_voice', 'tts'):
+        try:
+            _, filenames = default_storage.listdir(prefix)
+        except FileNotFoundError:
+            continue
+        except Exception:
+            logger.exception("cleanup_temp_ai_audio: failed to list '%s'", prefix)
+            continue
+
+        for filename in filenames:
+            path = f'{prefix}/{filename}'
+            try:
+                modified = default_storage.get_modified_time(path)
+                if timezone.is_naive(modified):
+                    modified = timezone.make_aware(modified)
+                if modified < cutoff:
+                    default_storage.delete(path)
+                    deleted += 1
+            except Exception:
+                logger.exception("cleanup_temp_ai_audio: failed to evaluate/delete '%s'", path)
+
+    logger.info("cleanup_temp_ai_audio: deleted %s stale file(s)", deleted)
+    return deleted
+
+
+@shared_task
+def send_daily_promotion_blasts():
+    """
+    🛡️ Daily promo reminder (schedule via Django admin Periodic Task, e.g.
+    crontab '0 17 * * *' for 5PM): for every currently-active Promotion,
+    blast customers who have ever ordered from that store - same targeting
+    as the manual merchant blast (send_marketing_blast_task), since there's
+    no live customer location tracking (only saved addresses for nearby-store
+    discovery, which isn't a reliable audience signal for this).
+
+    Sends at most once per promotion per calendar day, even if this task
+    runs more than once (e.g. retry, manual trigger).
+    """
+    from django.core.cache import cache
+    from .models import Promotion, MarketingBlast
+
+    now = timezone.now()
+    today = timezone.localdate()
+    active_promotions = Promotion.objects.filter(
+        is_active=True, start_date__lte=now, end_date__gte=now, store__isnull=False,
+    ).select_related('store')
+
+    queued = 0
+    for promo in active_promotions:
+        dedup_key = f'promo_blast_sent:{promo.id}:{today.isoformat()}'
+        if cache.get(dedup_key):
+            continue
+        cache.set(dedup_key, True, timeout=60 * 60 * 20)  # covers the rest of today
+
+        if promo.discount_percentage:
+            offer_text = f"{promo.discount_percentage}% off"
+        elif promo.discount_amount:
+            offer_text = f"KSh {promo.discount_amount} off"
+        else:
+            offer_text = "a special offer"
+        message = f"🎉 {promo.title}: Get {offer_text} today! Use code {promo.code} at {promo.store.name}."
+
+        blast = MarketingBlast.objects.create(store=promo.store, message=message)
+        send_marketing_blast_task.delay(promo.store.id, blast.id)
+        queued += 1
+
+    logger.info("send_daily_promotion_blasts: queued %s promo blast(s)", queued)
+    return queued

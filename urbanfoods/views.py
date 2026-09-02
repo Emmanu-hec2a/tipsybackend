@@ -25,6 +25,7 @@ from rest_framework.response import Response
 from rest_framework import status, authentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 from .permissions import IsCustomer, IsPartner, IsRider, IsSuperAdmin, SecureJWTAuthentication
 from rest_framework.decorators import api_view
@@ -1663,27 +1664,157 @@ class OrderVerificationImageView(APIView):
 
 class TheoryAIChatView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'ai_chat'
 
     def post(self, request):
-        user_message = request.data.get('message', '').lower()
+        raw_message = request.data.get('message', '')
+        user_message = raw_message.lower()
         lat = request.data.get('lat')
         lng = request.data.get('lng')
 
         if not user_message:
             return Response({'error': 'Message required'}, status=400)
 
-        # 1. Intent Detection
+        result = self._llm_intent(raw_message, lat, lng)
+        if result is None:
+            # 🛡️ Defense in depth: fall back to deterministic keyword matching
+            # if the LLM call fails/times out, so the assistant still responds.
+            result = self._keyword_fallback(user_message, lat, lng)
+
+        return Response(result)
+
+    def _llm_intent(self, raw_message, lat, lng):
+        """
+        Uses an LLM (function calling) purely to classify intent and extract a
+        clean product query from natural phrasing. The LLM never invents
+        product names/prices/availability - those always come from
+        _search_best_match/_search_nearby_products against the real DB.
+        """
+        openai_key = os.environ.get('OPENAI_API_KEY')
+        if not openai_key:
+            return None
+
+        tools = [{
+            "type": "function",
+            "function": {
+                "name": "reply_to_user",
+                "description": "Reply to the user's spoken request to a bar/liquor delivery app, choosing exactly one action.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "description": "A short (max 1-2 sentences), friendly, bartender-style spoken reply. This will be read aloud via TTS.",
+                        },
+                        "action": {
+                            "type": "string",
+                            "enum": ["NAVIGATE_CHECKOUT", "NAVIGATE_CART", "ADD_TO_CART", "SEARCH", "NONE"],
+                            "description": "NAVIGATE_CHECKOUT for paying/checking out, NAVIGATE_CART to view the cart, ADD_TO_CART when the user names a specific product to buy, SEARCH when they want to browse/find something, NONE for general conversation.",
+                        },
+                        "product_query": {
+                            "type": "string",
+                            "description": "Only for ADD_TO_CART or SEARCH: the product/brand/category, stripped of filler words like 'add', 'get me', 'to my cart'.",
+                        },
+                    },
+                    "required": ["message", "action"],
+                },
+            },
+        }]
+
+        try:
+            response = requests.post(
+                'https://api.openai.com/v1/chat/completions',
+                headers={
+                    'Authorization': f'Bearer {openai_key}',
+                    'Content-Type': 'application/json',
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are Tipsy, the voice assistant for a campus bar/liquor delivery app. "
+                                "You must always call reply_to_user exactly once. Keep spoken replies short "
+                                "and natural. Never state specific product names, prices, or availability "
+                                "yourself - that is filled in separately from real inventory data."
+                            ),
+                        },
+                        {"role": "user", "content": raw_message},
+                    ],
+                    "tools": tools,
+                    "tool_choice": {"type": "function", "function": {"name": "reply_to_user"}},
+                    "max_tokens": 200,
+                },
+                timeout=10,
+            )
+            if response.status_code != 200:
+                logger.error("Tipsy AI chat completion error %s: %s", response.status_code, response.text[:300])
+                return None
+
+            tool_calls = response.json()['choices'][0]['message'].get('tool_calls') or []
+            if not tool_calls:
+                return None
+            args = json.loads(tool_calls[0]['function']['arguments'])
+        except Exception:
+            logger.exception("Tipsy AI chat completion failed")
+            return None
+
+        action_kind = args.get('action', 'NONE')
+        message = args.get('message') or "Welcome to the Theory. What can I get for you tonight?"
+        product_query = (args.get('product_query') or '').strip()
+
+        if action_kind == 'NAVIGATE_CHECKOUT':
+            return {'text': message, 'intent': 'checkout', 'action': 'NAVIGATE', 'action_data': {'screen': '/checkout'}}
+
+        if action_kind == 'NAVIGATE_CART':
+            return {'text': message, 'intent': 'view_cart', 'action': 'NAVIGATE', 'action_data': {'screen': '/cart'}}
+
+        if action_kind == 'ADD_TO_CART':
+            product = self._search_best_match(product_query or raw_message, lat, lng)
+            if product:
+                return {
+                    'text': f"Done. Added {product.name} to your cart. Anything else?",
+                    'intent': 'add_to_cart',
+                    'action': 'ADD_TO_CART',
+                    'action_data': {
+                        'product_id': product.id,
+                        'name': product.name,
+                        'price': float(product.price),
+                        'store_id': product.store.id,
+                        'store_name': product.store.name,
+                        'delivery_fee': float(product.store.delivery_fee),
+                    },
+                }
+            return {'text': "Sorry, I couldn't find that one. Try another brand?", 'intent': 'add_to_cart', 'action': None, 'action_data': {}}
+
+        if action_kind == 'SEARCH':
+            products = self._search_nearby_products(product_query or raw_message, lat, lng)
+            if products:
+                top_p = products[0]
+                return {
+                    'text': f"Found it! {top_p.name} from {top_p.store.name} is available. Check the list.",
+                    'intent': 'search',
+                    'action': 'SEARCH_RESULTS',
+                    'action_data': {'query': product_query or raw_message},
+                }
+            return {'text': message, 'intent': 'search', 'action': None, 'action_data': {}}
+
+        return {'text': message, 'intent': 'conversation', 'action': None, 'action_data': {}}
+
+    def _keyword_fallback(self, user_message, lat, lng):
+        """Deterministic fallback used only when the LLM call is unavailable/fails."""
         intent = 'conversation'
         action = None
         action_data = {}
 
-        # Basic Intent Mapping
         if any(kw in user_message for kw in ['checkout', 'pay', 'done', 'buy now']):
             intent = 'checkout'
             action = 'NAVIGATE'
             action_data = {'screen': '/checkout'}
             response_text = "Sure thing. Heading to checkout now."
-        
+
         elif any(kw in user_message for kw in ['cart', 'basket']):
             intent = 'view_cart'
             action = 'NAVIGATE'
@@ -1693,7 +1824,7 @@ class TheoryAIChatView(APIView):
         elif any(kw in user_message for kw in ['add', 'get me', 'want to buy']):
             intent = 'add_to_cart'
             search_query = user_message.replace('add', '').replace('get me', '').replace('to my cart', '').strip()
-            
+
             product = self._search_best_match(search_query, lat, lng)
             if product:
                 action = 'ADD_TO_CART'
@@ -1710,10 +1841,9 @@ class TheoryAIChatView(APIView):
                 response_text = "Sorry, I couldn't find that one. Try another brand?"
 
         else:
-            # Default to Search/Recommendation
             intent = 'search'
             products = self._search_nearby_products(user_message, lat, lng)
-            
+
             if products:
                 action = 'SEARCH_RESULTS'
                 action_data = {'query': user_message}
@@ -1727,12 +1857,12 @@ class TheoryAIChatView(APIView):
                 else:
                     response_text = "Welcome to the Theory. What can I get for you tonight?"
 
-        return Response({
+        return {
             'text': response_text,
             'intent': intent,
             'action': action,
             'action_data': action_data
-        })
+        }
 
     def _search_best_match(self, query, lat, lng):
         products = self._search_nearby_products(query, lat, lng)
@@ -1790,6 +1920,8 @@ class TheoryAIChatView(APIView):
 class TempVoiceUploadView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'ai_voice_upload'
 
     def post(self, request):
         file_obj = request.FILES.get('file')
@@ -1811,80 +1943,57 @@ class TempVoiceUploadView(APIView):
         return Response({'url': public_url})
 
 class SecureTranscriptionView(APIView):
+    """
+    🛡️ Transcribes short voice commands via OpenAI Whisper.
+
+    Uses a single bounded HTTP call (no long-polling loop) so a Gunicorn
+    worker is never held for longer than the request timeout - important
+    since this is a synchronous, user-facing endpoint under concurrent load.
+    """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'ai_transcribe'
 
     def post(self, request):
         file_obj = request.FILES.get('file')
         if not file_obj:
             return Response({'error': 'No file provided'}, status=400)
 
-        # 1. Save to R2 to get a public URL for Netmind
-        from django.core.files.storage import default_storage
-        from django.utils.crypto import get_random_string
-        
-        ext = file_obj.name.split('.')[-1] if '.' in file_obj.name else 'm4a'
-        file_name = f"temp_voice/{get_random_string(12)}.{ext}"
-        saved_path = default_storage.save(file_name, file_obj)
-        audio_url = default_storage.url(saved_path)
-
-        # 2. Netmind Orchestration
-        netmind_key = os.environ.get('NETMIND_API_KEY')
-        if not netmind_key:
+        openai_key = os.environ.get('OPENAI_API_KEY')
+        if not openai_key:
             return Response({'error': 'Transcription service not configured'}, status=500)
 
         try:
-            # Initiate
-            headers = {"Authorization": f"Bearer {netmind_key}", "Content-Type": "application/json"}
-            init_resp = requests.post(
-                "https://api.netmind.ai/v1/generation",
-                headers=headers,
-                json={
-                    "model": "openai/whisper",
-                    "config": {
-                        "audio_url": audio_url,
-                        "task": "transcribe",
-                        "chunk_level": "segment",
-                        "version": "3",
-                        "batch_size": 64
-                    }
+            response = requests.post(
+                'https://api.openai.com/v1/audio/transcriptions',
+                headers={'Authorization': f'Bearer {openai_key}'},
+                files={
+                    'file': (
+                        file_obj.name or 'audio.m4a',
+                        file_obj.read(),
+                        file_obj.content_type or 'audio/m4a',
+                    ),
                 },
-                timeout=10
+                data={'model': 'whisper-1'},
+                timeout=20,
             )
-            
-            init_data = init_resp.json()
-            gen_id = init_data.get('generation_id')
-            if not gen_id:
-                logger.error(f"Netmind Initiation Error: {init_data}")
-                return Response({
-                    'error': 'Failed to initiate transcription',
-                    'details': init_data.get('message', 'No details from service')
-                }, status=status.HTTP_502_BAD_GATEWAY)
+        except requests.RequestException:
+            logger.exception('Whisper transcription request failed')
+            return Response({'error': 'Unable to reach transcription service'}, status=502)
 
-            # 3. Polling
-            import time
-            attempts = 0
-            while attempts < 30:
-                poll_resp = requests.get(f"https://api.netmind.ai/v1/generation/{gen_id}", headers=headers, timeout=10)
-                data = poll_resp.json()
-                
-                if data.get('status') in ['completed', 'success']:
-                    results = data.get('results', [])
-                    text = " ".join([s['text'] for s in results]) if isinstance(results, list) else data.get('text', '')
-                    return Response({'text': text})
-                elif data.get('status') == 'failed':
-                    return Response({'error': 'Transcription failed'}, status=502)
-                
-                time.sleep(1)
-                attempts += 1
-            
-            return Response({'error': 'Transcription timed out'}, status=504)
+        if response.status_code != 200:
+            logger.error('Whisper transcription error %s: %s', response.status_code, response.text[:300])
+            return Response({'error': 'Transcription failed'}, status=502)
 
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
+        text = response.json().get('text', '').strip()
+        return Response({'text': text})
+
 
 class SecureTTSView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'ai_speak'
 
     def post(self, request):
         text = request.data.get('text')
