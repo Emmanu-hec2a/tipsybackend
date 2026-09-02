@@ -1,7 +1,9 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework import status, permissions
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
+from rest_framework.throttling import ScopedRateThrottle
+from django.conf import settings
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Q, F, ExpressionWrapper, FloatField, Sum, Value
@@ -9,6 +11,7 @@ from django.db.models.functions import Sqrt, Power
 from django.core.cache import cache
 import json
 import logging
+import requests
 from decimal import Decimal, InvalidOperation
 from django.shortcuts import get_object_or_404
 
@@ -480,3 +483,78 @@ class RiderReportIssueView(APIView):
         send_telegram_message(report_msg, bot_type='admin')
         
         return Response({'status': 'success', 'message': 'Issue reported successfully'})
+
+
+class DirectionsView(APIView):
+    """
+    🛡️ Server-side proxy for Google Directions API, shared by rider and
+    customer apps (both poll a route between two arbitrary coordinates).
+
+    The Maps SDK key shipped in the Android app is (correctly) restricted to
+    Android apps, which blocks direct client-side HTTP calls to the Directions
+    REST API. Proxying through the backend keeps a Directions-only key
+    server-side, never exposed in the APK. No order-specific authorization is
+    needed here: inputs are plain coordinates, not order/user records.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'rider_directions'
+
+    def get(self, request):
+        origin = parse_rider_coordinates(
+            request.query_params.get('origin_lat'), request.query_params.get('origin_lng')
+        )
+        destination = parse_rider_coordinates(
+            request.query_params.get('dest_lat'), request.query_params.get('dest_lng')
+        )
+        if origin is None or destination is None:
+            return Response({'success': False, 'message': 'Invalid coordinates'}, status=status.HTTP_400_BAD_REQUEST)
+
+        origin_lat, origin_lng = origin
+        dest_lat, dest_lng = destination
+
+        api_key = getattr(settings, 'GOOGLE_DIRECTIONS_API_KEY', None)
+        if not api_key:
+            logger.error("DirectionsView: GOOGLE_DIRECTIONS_API_KEY is not configured")
+            return Response({'success': False, 'message': 'Directions service unavailable'}, status=502)
+
+        # Round to ~11m precision so nearby repeat requests (frequent GPS pings)
+        # can share a cached route instead of billing Google on every call.
+        cache_key = (
+            f"directions:{round(float(origin_lat), 4)}:{round(float(origin_lng), 4)}:"
+            f"{round(float(dest_lat), 4)}:{round(float(dest_lng), 4)}"
+        )
+        cached = cache.get(cache_key)
+        if cached:
+            return Response(cached)
+
+        try:
+            response = requests.get(
+                'https://maps.googleapis.com/maps/api/directions/json',
+                params={
+                    'origin': f'{origin_lat},{origin_lng}',
+                    'destination': f'{dest_lat},{dest_lng}',
+                    'mode': 'driving',
+                    'key': api_key,
+                },
+                timeout=8,
+            )
+            data = response.json()
+        except requests.RequestException:
+            logger.exception("DirectionsView: request to Google Directions API failed")
+            return Response({'success': False, 'message': 'Unable to reach directions service'}, status=502)
+
+        if data.get('status') != 'OK' or not data.get('routes'):
+            logger.warning("DirectionsView: Google Directions API error: %s", data.get('status'))
+            return Response({'success': False, 'message': 'Route not found'}, status=502)
+
+        route = data['routes'][0]
+        legs = route.get('legs') or [{}]
+        payload = {
+            'success': True,
+            'polyline': route.get('overview_polyline', {}).get('points'),
+            'distance_meters': legs[0].get('distance', {}).get('value'),
+            'duration_seconds': legs[0].get('duration', {}).get('value'),
+        }
+        cache.set(cache_key, payload, timeout=20)
+        return Response(payload)

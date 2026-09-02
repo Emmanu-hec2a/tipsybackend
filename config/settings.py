@@ -329,6 +329,7 @@ REST_FRAMEWORK = {
         'payment_status_per_payment': '12/minute',
         'payment_query': '10/minute',
         'auth_login': '10/minute',
+        'rider_directions': '60/minute',   # ~1 route refresh every 10-15s of active navigation
     },
 }
 
@@ -514,6 +515,10 @@ MPESA_PAYBILL_NUMBER = os.environ.get('MPESA_PAYBILL_NUMBER')
 MPESA_TILL_NUMBER = os.environ.get('MPESA_TILL_NUMBER')
 ACCOUNT_NUMBER = os.environ.get('ACCOUNT_NUMBER')
 MPESA_CALLBACK_URL = os.environ.get('MPESA_CALLBACK_URL')
+# 🛡️ Server-side only key for Directions API proxy (never shipped to mobile clients).
+# Restrict this key in Google Cloud Console to: API restriction = Directions API only,
+# Application restriction = None/IP (server calls only, no Android app restriction).
+GOOGLE_DIRECTIONS_API_KEY = os.environ.get('GOOGLE_DIRECTIONS_API_KEY')
 # Payment Credentials (Managed via PlatformConfig and Store models)
 MPESA_PRODUCTION = os.environ.get('MPESA_PRODUCTION', 'False')
 ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY')

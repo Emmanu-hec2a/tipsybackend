@@ -114,6 +114,7 @@ superadmin_patterns = [
 
 urlpatterns = [
     path('fcm-token/', views.SaveFCMTokenView.as_view(), name='save_fcm_token_root'),
+    path('directions/', api_v1_rider_views.DirectionsView.as_view(), name='directions'),
     path('customer/profile/', api_v1_customer_views.CustomerProfileView.as_view(), name='customer_profile_api_alt'),
     path('promotions/available/', api_v1_customer_views.AvailablePromotionsView.as_view(), name='api_available_promotions'),
     path('promotions/validate/', api_v1_customer_views.ValidatePromotionView.as_view(), name='api_validate_promotion'),
