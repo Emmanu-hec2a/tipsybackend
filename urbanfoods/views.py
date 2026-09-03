@@ -1686,66 +1686,48 @@ class TheoryAIChatView(APIView):
 
     def _llm_intent(self, raw_message, lat, lng):
         """
-        Uses an LLM (function calling) purely to classify intent and extract a
-        clean product query from natural phrasing. The LLM never invents
-        product names/prices/availability - those always come from
+        Uses an LLM purely to classify intent and extract a clean product
+        query from natural phrasing. The LLM never invents product
+        names/prices/availability - those always come from
         _search_best_match/_search_nearby_products against the real DB.
+
+        Uses Netmind's OpenAI-compatible chat completions (no confirmed
+        function-calling/tools support there), so the model is instructed to
+        return a raw JSON object in its message content instead.
         """
-        openai_key = os.environ.get('OPENAI_API_KEY')
-        if not openai_key:
+        netmind_key = os.environ.get('NETMIND_API_KEY')
+        if not netmind_key:
             return None
 
-        tools = [{
-            "type": "function",
-            "function": {
-                "name": "reply_to_user",
-                "description": "Reply to the user's spoken request to a bar/liquor delivery app, choosing exactly one action.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "message": {
-                            "type": "string",
-                            "description": "A short (max 1-2 sentences), friendly, bartender-style spoken reply. This will be read aloud via TTS.",
-                        },
-                        "action": {
-                            "type": "string",
-                            "enum": ["NAVIGATE_CHECKOUT", "NAVIGATE_CART", "ADD_TO_CART", "SEARCH", "NONE"],
-                            "description": "NAVIGATE_CHECKOUT for paying/checking out, NAVIGATE_CART to view the cart, ADD_TO_CART when the user names a specific product to buy, SEARCH when they want to browse/find something, NONE for general conversation.",
-                        },
-                        "product_query": {
-                            "type": "string",
-                            "description": "Only for ADD_TO_CART or SEARCH: the product/brand/category, stripped of filler words like 'add', 'get me', 'to my cart'.",
-                        },
-                    },
-                    "required": ["message", "action"],
-                },
-            },
-        }]
+        system_prompt = (
+            "You are Tipsy, the voice assistant for a campus bar/liquor delivery app. "
+            "Reply with ONLY a single raw JSON object (no markdown, no code fences, no extra text) "
+            "matching exactly this shape:\n"
+            '{"message": "<short 1-2 sentence friendly bartender-style spoken reply>", '
+            '"action": "<one of NAVIGATE_CHECKOUT, NAVIGATE_CART, ADD_TO_CART, SEARCH, NONE>", '
+            '"product_query": "<only for ADD_TO_CART or SEARCH: the product/brand/category, '
+            'stripped of filler words like \'add\', \'get me\', \'to my cart\'>"}\n'
+            "Use NAVIGATE_CHECKOUT for paying/checking out, NAVIGATE_CART to view the cart, "
+            "ADD_TO_CART when the user names a specific product to buy, SEARCH to browse/find "
+            "something, NONE for general conversation. Never state specific product names, "
+            "prices, or availability yourself - that is filled in separately from real inventory data."
+        )
 
         try:
             response = requests.post(
-                'https://api.openai.com/v1/chat/completions',
+                'https://api.netmind.ai/inference-api/openai/v1/chat/completions',
                 headers={
-                    'Authorization': f'Bearer {openai_key}',
+                    'Authorization': f'Bearer {netmind_key}',
                     'Content-Type': 'application/json',
                 },
                 json={
-                    "model": "gpt-4o-mini",
+                    "model": "meta-llama/Meta-Llama-3.3-70B-Instruct",
                     "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are Tipsy, the voice assistant for a campus bar/liquor delivery app. "
-                                "You must always call reply_to_user exactly once. Keep spoken replies short "
-                                "and natural. Never state specific product names, prices, or availability "
-                                "yourself - that is filled in separately from real inventory data."
-                            ),
-                        },
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": raw_message},
                     ],
-                    "tools": tools,
-                    "tool_choice": {"type": "function", "function": {"name": "reply_to_user"}},
                     "max_tokens": 200,
+                    "temperature": 0.3,
                 },
                 timeout=10,
             )
@@ -1753,10 +1735,17 @@ class TheoryAIChatView(APIView):
                 logger.error("Tipsy AI chat completion error %s: %s", response.status_code, response.text[:300])
                 return None
 
-            tool_calls = response.json()['choices'][0]['message'].get('tool_calls') or []
-            if not tool_calls:
+            content = response.json()['choices'][0]['message']['content'].strip()
+            # 🛡️ Defensive parsing: strip markdown code fences if the model adds them anyway
+            if content.startswith('```'):
+                content = content.strip('`')
+                content = content.split('\n', 1)[1] if '\n' in content else content
+            json_start = content.find('{')
+            json_end = content.rfind('}')
+            if json_start == -1 or json_end == -1:
+                logger.error("Tipsy AI chat completion: no JSON object found in response: %s", content[:300])
                 return None
-            args = json.loads(tool_calls[0]['function']['arguments'])
+            args = json.loads(content[json_start:json_end + 1])
         except Exception:
             logger.exception("Tipsy AI chat completion failed")
             return None
@@ -1944,11 +1933,14 @@ class TempVoiceUploadView(APIView):
 
 class SecureTranscriptionView(APIView):
     """
-    🛡️ Transcribes short voice commands via OpenAI Whisper.
+    🛡️ Transcribes short voice commands via Netmind's hosted Whisper model.
 
-    Uses a single bounded HTTP call (no long-polling loop) so a Gunicorn
-    worker is never held for longer than the request timeout - important
-    since this is a synchronous, user-facing endpoint under concurrent load.
+    Netmind's Whisper endpoint is job-based (create generation, then poll for
+    a result) rather than a single synchronous call like OpenAI's own Whisper
+    API. Polling is capped at 15s (short voice clips finish well within that)
+    to limit - though not fully eliminate - how long a Gunicorn worker can be
+    held. A fully non-blocking version (background task + client polling)
+    would be a follow-up improvement if voice traffic grows.
     """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
@@ -1960,34 +1952,59 @@ class SecureTranscriptionView(APIView):
         if not file_obj:
             return Response({'error': 'No file provided'}, status=400)
 
-        openai_key = os.environ.get('OPENAI_API_KEY')
-        if not openai_key:
+        netmind_key = os.environ.get('NETMIND_API_KEY')
+        if not netmind_key:
             return Response({'error': 'Transcription service not configured'}, status=500)
 
+        # Netmind needs a public URL for the audio, not a direct file upload
+        from django.core.files.storage import default_storage
+        from django.utils.crypto import get_random_string
+
+        ext = file_obj.name.split('.')[-1] if '.' in file_obj.name else 'm4a'
+        file_name = f"temp_voice/{get_random_string(12)}.{ext}"
+        saved_path = default_storage.save(file_name, file_obj)
+        audio_url = default_storage.url(saved_path)
+
+        headers = {"Authorization": f"Bearer {netmind_key}", "Content-Type": "application/json"}
         try:
-            response = requests.post(
-                'https://api.openai.com/v1/audio/transcriptions',
-                headers={'Authorization': f'Bearer {openai_key}'},
-                files={
-                    'file': (
-                        file_obj.name or 'audio.m4a',
-                        file_obj.read(),
-                        file_obj.content_type or 'audio/m4a',
-                    ),
+            init_resp = requests.post(
+                "https://api.netmind.ai/v1/generation",
+                headers=headers,
+                json={
+                    "model": "openai/whisper",
+                    "config": {
+                        "audio_url": audio_url,
+                        "task": "transcribe",
+                        "chunk_level": "segment",
+                        "version": "3",
+                        "batch_size": 64,
+                        "num_speakers": None,
+                    },
                 },
-                data={'model': 'whisper-1'},
-                timeout=20,
+                timeout=10,
             )
+            init_data = init_resp.json()
+            gen_id = init_data.get('generation_id')
+            if not gen_id:
+                logger.error("Netmind transcription initiation error: %s", init_data)
+                return Response({'error': 'Failed to initiate transcription'}, status=502)
+
+            import time
+            for _ in range(15):
+                poll_resp = requests.get(f"https://api.netmind.ai/v1/generation/{gen_id}", headers=headers, timeout=10)
+                data = poll_resp.json()
+                if data.get('status') in ('completed', 'success'):
+                    results = data.get('results', [])
+                    text = " ".join([s['text'] for s in results]) if isinstance(results, list) else data.get('text', '')
+                    return Response({'text': text.strip()})
+                if data.get('status') == 'failed':
+                    return Response({'error': 'Transcription failed'}, status=502)
+                time.sleep(1)
+
+            return Response({'error': 'Transcription timed out'}, status=504)
         except requests.RequestException:
-            logger.exception('Whisper transcription request failed')
+            logger.exception('Netmind transcription request failed')
             return Response({'error': 'Unable to reach transcription service'}, status=502)
-
-        if response.status_code != 200:
-            logger.error('Whisper transcription error %s: %s', response.status_code, response.text[:300])
-            return Response({'error': 'Transcription failed'}, status=502)
-
-        text = response.json().get('text', '').strip()
-        return Response({'text': text})
 
 
 class SecureTTSView(APIView):
@@ -2000,36 +2017,63 @@ class SecureTTSView(APIView):
         if not text:
             return Response({'error': 'Text required'}, status=400)
 
-        openai_key = os.environ.get('OPENAI_API_KEY')
-        if not openai_key:
+        netmind_key = os.environ.get('NETMIND_API_KEY')
+        if not netmind_key:
             return Response({'error': 'TTS service not configured'}, status=500)
 
         try:
-            # 1. Call OpenAI TTS
+            # 🛡️ Netmind's speech endpoint takes form data, not JSON, and
+            # returns a JSON payload (not raw audio bytes like OpenAI's TTS).
             resp = requests.post(
-                "https://api.openai.com/v1/audio/speech",
-                headers={"Authorization": f"Bearer {openai_key}"},
-                json={
-                    "model": "tts-1",
-                    "input": text,
-                    "voice": "onyx"
-                },
-                timeout=30
+                "https://api.netmind.ai/inference-api/openai/v1/audio/speech",
+                headers={"Authorization": f"Bearer {netmind_key}"},
+                data={"model": "ResembleAI/Chatterbox", "input": text},
+                timeout=30,
             )
-
             if resp.status_code != 200:
-                return Response({'error': 'OpenAI TTS failed'}, status=resp.status_code)
+                logger.error("Netmind TTS error %s: %s", resp.status_code, resp.text[:300])
+                return Response({'error': 'TTS failed'}, status=502)
+            result = resp.json()
+        except requests.RequestException:
+            logger.exception("Netmind TTS request failed")
+            return Response({'error': 'Unable to reach TTS service'}, status=502)
+        except ValueError:
+            logger.error("Netmind TTS: non-JSON response: %s", resp.text[:300])
+            return Response({'error': 'Unexpected TTS response'}, status=502)
 
-            # 2. Save to R2
-            from django.core.files.storage import default_storage
-            from django.core.files.base import ContentFile
-            from django.utils.crypto import get_random_string
-            
-            file_name = f"tts/{get_random_string(12)}.mp3"
-            saved_path = default_storage.save(file_name, ContentFile(resp.content))
-            audio_url = default_storage.url(saved_path)
+        # 🛡️ Response schema isn't documented publicly - check common field
+        # names defensively; log the raw shape if none match so it's a quick
+        # one-line fix once we see a real response.
+        hosted_url = (
+            result.get('audio_url') or result.get('url')
+            or result.get('output_url') or result.get('output')
+        )
+        audio_bytes = None
+        if hosted_url:
+            try:
+                audio_resp = requests.get(hosted_url, timeout=20)
+                audio_resp.raise_for_status()
+                audio_bytes = audio_resp.content
+            except requests.RequestException:
+                logger.exception("Failed to download Netmind TTS audio from %s", hosted_url)
+        else:
+            b64_audio = result.get('audio_content') or result.get('audio_base64') or result.get('data')
+            if isinstance(b64_audio, str):
+                import base64
+                try:
+                    audio_bytes = base64.b64decode(b64_audio)
+                except Exception:
+                    logger.exception("Failed to decode base64 Netmind TTS audio")
 
-            return Response({'url': audio_url})
+        if not audio_bytes:
+            logger.error("Netmind TTS: unrecognized response shape: %s", str(result)[:500])
+            return Response({'error': 'Unexpected TTS response format'}, status=502)
 
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
+        from django.core.files.storage import default_storage
+        from django.core.files.base import ContentFile
+        from django.utils.crypto import get_random_string
+
+        file_name = f"tts/{get_random_string(12)}.mp3"
+        saved_path = default_storage.save(file_name, ContentFile(audio_bytes))
+        audio_url = default_storage.url(saved_path)
+        return Response({'url': audio_url})
