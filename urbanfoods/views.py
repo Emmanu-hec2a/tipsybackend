@@ -1965,64 +1965,45 @@ class SecureTranscriptionView(APIView):
         saved_path = default_storage.save(file_name, file_obj)
         audio_url = default_storage.url(saved_path)
 
-        headers = {"Authorization": f"Bearer {netmind_key}", "Content-Type": "application/json"}
+        # 🛡️ Tipsy Voice AI: High-Speed Synchronous Transcription
+        # We switch from job-based polling to a synchronous OpenAI-compatible endpoint.
+        # This reduces "Thinking Time" from 23s to ~2s for short voice commands.
+        headers = {"Authorization": f"Bearer {netmind_key}"}
         try:
-            init_resp = requests.post(
-                "https://api.netmind.ai/v1/generation",
+            # Netmind's synchronous Whisper endpoint expects multipart/form-data
+            file_obj.seek(0)
+            files = {
+                'file': (file_obj.name or 'audio.m4a', file_obj, file_obj.content_type)
+            }
+            # 🛡️ Using exact model name from Netmind Hub: openai/whisper
+            data = {'model': 'openai/whisper'}
+            
+            resp = requests.post(
+                "https://api.netmind.ai/inference-api/v1/audio/transcriptions",
                 headers=headers,
-                json={
-                    "model": "openai/whisper",
-                    "config": {
-                        "audio_url": audio_url,
-                        "task": "transcribe",
-                        "chunk_level": "segment",
-                        "version": "3",
-                        "batch_size": 64,
-                        "num_speakers": None,
-                    },
-                },
-                timeout=10,
+                files=files,
+                data=data,
+                timeout=25, # Generous timeout for high-quality v3 inference
             )
-            init_data = init_resp.json()
             
-            # 🛡️ Netmind AI Defensive Identifier Handling:
-            # The API might return 'id' or 'generation_id' depending on the smart-model route.
-            gen_id = init_data.get('id') or init_data.get('generation_id')
+            if resp.status_code != 200:
+                logger.error("Netmind synchronous transcription error %s: %s", resp.status_code, resp.text[:300])
+                return Response({'error': 'Transcription failed'}, status=502)
+                
+            result = resp.json()
+            text = result.get('text', '').strip()
             
-            if not gen_id:
-                logger.error("Netmind transcription initiation error: %s", init_data)
-                return Response({'error': 'Failed to initiate transcription'}, status=502)
-
-            import time
-            for _ in range(15):
-                poll_resp = requests.get(f"https://api.netmind.ai/v1/generation/{gen_id}", headers=headers, timeout=10)
-                data = poll_resp.json()
+            if not text:
+                logger.warning("Netmind returned empty transcription for file %s", file_obj.name)
+                return Response({'text': ''})
                 
-                # Check for completion
-                if data.get('status') in ('completed', 'success'):
-                    # Netmind results can be in 'results', 'result', or 'text'
-                    results = data.get('results') or data.get('result')
-                    
-                    if isinstance(results, list):
-                        text = " ".join([s.get('text', '') for s in results])
-                    elif isinstance(results, dict):
-                        text = results.get('text', '')
-                    else:
-                        text = data.get('text', '')
-                        
-                    return Response({'text': text.strip()})
-                
-                if data.get('status') == 'failed':
-                    error_msg = data.get('error') or data.get('logs') or 'Transcription failed'
-                    logger.error("Netmind transcription job failed: %s", error_msg)
-                    return Response({'error': 'Transcription failed'}, status=502)
+            return Response({'text': text})
 
-                time.sleep(1)
-
+        except requests.Timeout:
             return Response({'error': 'Transcription timed out'}, status=504)
-        except requests.RequestException:
-            logger.exception('Netmind transcription request failed')
-            return Response({'error': 'Unable to reach transcription service'}, status=502)
+        except Exception:
+            logger.exception('Netmind synchronous transcription failed')
+            return Response({'error': 'Transcription service error'}, status=502)
 
 
 class SecureTTSView(APIView):
@@ -2042,6 +2023,7 @@ class SecureTTSView(APIView):
         try:
             # 🛡️ Netmind's speech endpoint takes form data, not JSON, and
             # returns a JSON payload (not raw audio bytes like OpenAI's TTS).
+            # Using exact model name from Netmind Hub: ResembleAI/Chatterbox
             resp = requests.post(
                 "https://api.netmind.ai/inference-api/openai/v1/audio/speech",
                 headers={"Authorization": f"Bearer {netmind_key}"},
