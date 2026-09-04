@@ -1700,17 +1700,16 @@ class TheoryAIChatView(APIView):
             return None
 
         system_prompt = (
-            "You are Tipsy, the voice assistant for a campus bar/liquor delivery app. "
+            "You are Tipsy, the friendly and charismatic voice assistant for PourExpress, a premium campus bar and liquor delivery app. "
+            "Your personality is that of a professional, witty, and helpful bartender. "
             "Reply with ONLY a single raw JSON object (no markdown, no code fences, no extra text) "
             "matching exactly this shape:\n"
-            '{"message": "<short 1-2 sentence friendly bartender-style spoken reply>", '
-            '"action": "<one of NAVIGATE_CHECKOUT, NAVIGATE_CART, ADD_TO_CART, SEARCH, NONE>", '
-            '"product_query": "<only for ADD_TO_CART or SEARCH: the product/brand/category, '
-            'stripped of filler words like \'add\', \'get me\', \'to my cart\'>"}\n'
-            "Use NAVIGATE_CHECKOUT for paying/checking out, NAVIGATE_CART to view the cart, "
-            "ADD_TO_CART when the user names a specific product to buy, SEARCH to browse/find "
-            "something, NONE for general conversation. Never state specific product names, "
-            "prices, or availability yourself - that is filled in separately from real inventory data."
+            '{"message": "<your spoken reply: be friendly, witty, and keep it to 1-2 sentences>", '
+            '"action": "<one of NAVIGATE_CHECKOUT, NAVIGATE_CART, ADD_TO_CART, SEARCH, CONVERSE, NONE>", '
+            '"product_query": "<only for ADD_TO_CART or SEARCH: the product name>"}\n'
+            "Use CONVERSE for greetings like 'Hello' or 'How are you'. Use NAVIGATE_CHECKOUT for paying, "
+            "NAVIGATE_CART for viewing the cart, and ADD_TO_CART for buying specific drinks. "
+            "If you don't understand, use CONVERSE and ask for clarification in a friendly way."
         )
 
         try:
@@ -1790,13 +1789,17 @@ class TheoryAIChatView(APIView):
                 }
             return {'text': message, 'intent': 'search', 'action': None, 'action_data': {}}
 
-        return {'text': message, 'intent': 'conversation', 'action': None, 'action_data': {}}
+        return {'text': message, 'intent': 'conversation', 'action': 'CONVERSE', 'action_data': {}}
 
     def _keyword_fallback(self, user_message, lat, lng):
         """Deterministic fallback used only when the LLM call is unavailable/fails."""
         intent = 'conversation'
-        action = None
+        action = 'CONVERSE'
         action_data = {}
+
+        if any(kw in user_message for kw in ['hello', 'hi', 'hey', 'tipsy']):
+            response_text = "Hey there! Welcome to the Theory. I'm Tipsy—what can I get for you tonight?"
+            intent = 'greeting'
 
         if any(kw in user_message for kw in ['checkout', 'pay', 'done', 'buy now']):
             intent = 'checkout'
@@ -1965,62 +1968,75 @@ class SecureTranscriptionView(APIView):
         saved_path = default_storage.save(file_name, file_obj)
         audio_url = default_storage.url(saved_path)
 
-        # 🛡️ Netmind Smart-Model Hybrid Logic:
-        # Based on Netmind Hub, openai/whisper requires the asynchronous job route (/v1/generation)
-        # to handle high-fidelity v3 inference without timing out the connection.
-        headers = {"Authorization": f"Bearer {netmind_key}", "Content-Type": "application/json"}
+        # 🛡️ Tipsy Voice AI: Hybrid Ultra-Low Latency Inference
+        # Based on 499 errors (client timeouts), we switch to a Direct-Stream synchronous
+        # model that bypasses the S3/polling overhead entirely for short commands.
+        headers = {"Authorization": f"Bearer {netmind_key}"}
         try:
-            # 1. Initiate Asynchronous Transcription Job
+            # Re-wind the file pointer for reading
+            file_obj.seek(0)
+            
+            # Use the OpenAI-compatible multipart upload for real-time inference
+            files = {
+                'file': (file_obj.name or 'command.m4a', file_obj, file_obj.content_type)
+            }
+            data = {'model': 'openai/whisper'}
+
+            # We use a tighter timeout to ensure we return to the client before 30s
+            resp = requests.post(
+                "https://api.netmind.ai/inference-api/openai/v1/audio/transcriptions",
+                headers=headers,
+                files=files,
+                data=data,
+                timeout=20,
+            )
+            
+            if resp.status_code == 200:
+                result = resp.json()
+                text = result.get('text', '').strip()
+                return Response({'text': text})
+
+            # If synchronous fails or takes too long, we fallback to the job route
+            logger.warning(f"Netmind sync transcription failed ({resp.status_code}), attempting async fallback...")
+            
+        except (requests.Timeout, requests.RequestException) as e:
+            logger.warning(f"Netmind sync transcription timed out: {e}. Attempting async fallback...")
+
+        # ── ASYNC FALLBACK (Reliability Path) ──
+        # If the direct stream fails, we fall back to the robust Job route
+        try:
             init_resp = requests.post(
                 "https://api.netmind.ai/v1/generation",
-                headers=headers,
+                headers={"Authorization": f"Bearer {netmind_key}", "Content-Type": "application/json"},
                 json={
                     "model": "openai/whisper",
                     "config": {
                         "audio_url": audio_url,
                         "task": "transcribe",
-                        "chunk_level": "segment",
                         "version": "3",
-                        "batch_size": 64,
-                        "num_speakers": None,
                     },
                 },
-                timeout=15,
+                timeout=10,
             )
             
-            if init_resp.status_code != 200:
-                logger.error("Netmind initiation failed %s: %s", init_resp.status_code, init_resp.text[:300])
-                return Response({'error': 'Transcription failed to start'}, status=502)
+            if init_resp.status_code == 200:
+                gen_id = init_resp.json().get('id') or init_resp.json().get('generation_id')
+                # Rapid Polling (5s max) before final 504 to prevent client 499
+                import time
+                for _ in range(5):
+                    poll = requests.get(f"https://api.netmind.ai/v1/generation/{gen_id}", 
+                                       headers={"Authorization": f"Bearer {netmind_key}"}, timeout=5)
+                    data = poll.json()
+                    if data.get('status') in ('completed', 'success'):
+                        results = data.get('results') or data.get('result') or data.get('text', '')
+                        text = " ".join([s.get('text', '') for s in results]) if isinstance(results, list) else str(results)
+                        return Response({'text': text.strip()})
+                    time.sleep(1)
 
-            init_data = init_resp.json()
-            gen_id = init_data.get('id') or init_data.get('generation_id')
-            
-            if not gen_id:
-                logger.error("No generation ID returned: %s", init_data)
-                return Response({'error': 'Failed to track transcription'}, status=502)
-
-            # 2. Optimized Polling Loop (Matches Hub Documentation)
-            import time
-            for _ in range(25): # Support up to 25s for high-quality audio
-                poll_resp = requests.get(f"https://api.netmind.ai/v1/generation/{gen_id}", headers=headers, timeout=10)
-                data = poll_resp.json()
-                
-                if data.get('status') in ('completed', 'success'):
-                    results = data.get('results') or data.get('result')
-                    if isinstance(results, list):
-                        text = " ".join([s.get('text', '') for s in results])
-                    elif isinstance(results, dict):
-                        text = results.get('text', '')
-                    else:
-                        text = data.get('text', '')
-                    return Response({'text': text.strip()})
-                
-                if data.get('status') == 'failed':
-                    return Response({'error': 'Transcription job failed'}, status=502)
-                
-                time.sleep(1) # Wait 1s between polls
-
-            return Response({'error': 'Transcription timed out'}, status=504)
+            return Response({'error': 'Service is busy, try a shorter command'}, status=504)
+        except Exception:
+            logger.exception('Netmind hybrid transcription failed')
+            return Response({'error': 'Transcription service error'}, status=502)
         except Exception:
             logger.exception('Netmind synchronous transcription failed')
             return Response({'error': 'Transcription service error'}, status=502)
