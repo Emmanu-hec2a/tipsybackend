@@ -1984,7 +1984,11 @@ class SecureTranscriptionView(APIView):
                 timeout=10,
             )
             init_data = init_resp.json()
-            gen_id = init_data.get('generation_id')
+            
+            # 🛡️ Netmind AI Defensive Identifier Handling:
+            # The API might return 'id' or 'generation_id' depending on the smart-model route.
+            gen_id = init_data.get('id') or init_data.get('generation_id')
+            
             if not gen_id:
                 logger.error("Netmind transcription initiation error: %s", init_data)
                 return Response({'error': 'Failed to initiate transcription'}, status=502)
@@ -1993,12 +1997,26 @@ class SecureTranscriptionView(APIView):
             for _ in range(15):
                 poll_resp = requests.get(f"https://api.netmind.ai/v1/generation/{gen_id}", headers=headers, timeout=10)
                 data = poll_resp.json()
+                
+                # Check for completion
                 if data.get('status') in ('completed', 'success'):
-                    results = data.get('results', [])
-                    text = " ".join([s['text'] for s in results]) if isinstance(results, list) else data.get('text', '')
+                    # Netmind results can be in 'results', 'result', or 'text'
+                    results = data.get('results') or data.get('result')
+                    
+                    if isinstance(results, list):
+                        text = " ".join([s.get('text', '') for s in results])
+                    elif isinstance(results, dict):
+                        text = results.get('text', '')
+                    else:
+                        text = data.get('text', '')
+                        
                     return Response({'text': text.strip()})
+                
                 if data.get('status') == 'failed':
+                    error_msg = data.get('error') or data.get('logs') or 'Transcription failed'
+                    logger.error("Netmind transcription job failed: %s", error_msg)
                     return Response({'error': 'Transcription failed'}, status=502)
+
                 time.sleep(1)
 
             return Response({'error': 'Transcription timed out'}, status=504)
