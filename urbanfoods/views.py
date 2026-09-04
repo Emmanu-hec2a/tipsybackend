@@ -1965,41 +1965,61 @@ class SecureTranscriptionView(APIView):
         saved_path = default_storage.save(file_name, file_obj)
         audio_url = default_storage.url(saved_path)
 
-        # 🛡️ Tipsy Voice AI: High-Speed Synchronous Transcription
-        # We switch from job-based polling to a synchronous OpenAI-compatible endpoint.
-        # This reduces "Thinking Time" from 23s to ~2s for short voice commands.
-        headers = {"Authorization": f"Bearer {netmind_key}"}
+        # 🛡️ Netmind Smart-Model Hybrid Logic:
+        # Based on Netmind Hub, openai/whisper requires the asynchronous job route (/v1/generation)
+        # to handle high-fidelity v3 inference without timing out the connection.
+        headers = {"Authorization": f"Bearer {netmind_key}", "Content-Type": "application/json"}
         try:
-            # Netmind's synchronous Whisper endpoint expects multipart/form-data
-            file_obj.seek(0)
-            files = {
-                'file': (file_obj.name or 'audio.m4a', file_obj, file_obj.content_type)
-            }
-            # 🛡️ Using exact model name from Netmind Hub: openai/whisper
-            data = {'model': 'openai/whisper'}
-            
-            resp = requests.post(
-                "https://api.netmind.ai/inference-api/v1/audio/transcriptions",
+            # 1. Initiate Asynchronous Transcription Job
+            init_resp = requests.post(
+                "https://api.netmind.ai/v1/generation",
                 headers=headers,
-                files=files,
-                data=data,
-                timeout=25, # Generous timeout for high-quality v3 inference
+                json={
+                    "model": "openai/whisper",
+                    "config": {
+                        "audio_url": audio_url,
+                        "task": "transcribe",
+                        "chunk_level": "segment",
+                        "version": "3",
+                        "batch_size": 64,
+                        "num_speakers": None,
+                    },
+                },
+                timeout=15,
             )
             
-            if resp.status_code != 200:
-                logger.error("Netmind synchronous transcription error %s: %s", resp.status_code, resp.text[:300])
-                return Response({'error': 'Transcription failed'}, status=502)
-                
-            result = resp.json()
-            text = result.get('text', '').strip()
-            
-            if not text:
-                logger.warning("Netmind returned empty transcription for file %s", file_obj.name)
-                return Response({'text': ''})
-                
-            return Response({'text': text})
+            if init_resp.status_code != 200:
+                logger.error("Netmind initiation failed %s: %s", init_resp.status_code, init_resp.text[:300])
+                return Response({'error': 'Transcription failed to start'}, status=502)
 
-        except requests.Timeout:
+            init_data = init_resp.json()
+            gen_id = init_data.get('id') or init_data.get('generation_id')
+            
+            if not gen_id:
+                logger.error("No generation ID returned: %s", init_data)
+                return Response({'error': 'Failed to track transcription'}, status=502)
+
+            # 2. Optimized Polling Loop (Matches Hub Documentation)
+            import time
+            for _ in range(25): # Support up to 25s for high-quality audio
+                poll_resp = requests.get(f"https://api.netmind.ai/v1/generation/{gen_id}", headers=headers, timeout=10)
+                data = poll_resp.json()
+                
+                if data.get('status') in ('completed', 'success'):
+                    results = data.get('results') or data.get('result')
+                    if isinstance(results, list):
+                        text = " ".join([s.get('text', '') for s in results])
+                    elif isinstance(results, dict):
+                        text = results.get('text', '')
+                    else:
+                        text = data.get('text', '')
+                    return Response({'text': text.strip()})
+                
+                if data.get('status') == 'failed':
+                    return Response({'error': 'Transcription job failed'}, status=502)
+                
+                time.sleep(1) # Wait 1s between polls
+
             return Response({'error': 'Transcription timed out'}, status=504)
         except Exception:
             logger.exception('Netmind synchronous transcription failed')
