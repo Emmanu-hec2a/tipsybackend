@@ -85,13 +85,12 @@ class SubscriptionBilling:
             "BusinessShortCode": self.shortcode,
             "Password": password,
             "Timestamp": timestamp,
-            "TransactionType": "CustomerPayBillOnline",
+            "TransactionType": "CustomerBuyGoodsOnline", # 🛡️ Updated to Buy Goods (Till)
             "Amount": int(amount if amount is not None else store.plan_price),
             "PartyA": phone,
             "PartyB": self.shortcode,
             "PhoneNumber": phone,
             "CallBackURL": f"{settings.SITE_URL}/api/v1/billing/callback/",
-            "AccountReference": f"SUB-{store.id}",
             "TransactionDesc": f"{store.name} Monthly Subscription"
         }
 
