@@ -95,7 +95,7 @@ class SubscriptionBilling:
             "TransactionType": "CustomerBuyGoodsOnline",  # Use CustomerPayBillOnline if 4357255 is Paybill
             "Amount": int(amount if amount is not None else store.plan_price),
             "PartyA": phone,
-            "PartyB": str(self.shortcode),  # Note: Must be Head Office / Store Till number
+            "PartyB": "1615931",  # Note: Must be Head Office / Store Till number
             "PhoneNumber": phone,
             "CallBackURL": f"{settings.SITE_URL}/api/v1/billing/callback/",
             "AccountReference": account_ref,  # 🚨 MANDATORY FIELD (Max 12 chars)
