@@ -59,8 +59,11 @@ class SubscriptionBilling:
             return None
 
     def charge_subscription(self, store, custom_phone=None, amount=None):
+        logger.info(f"--- [STK Push Initiated] Store: {store.name} (ID: {store.id}) ---")
+
         access_token = self.get_access_token()
         if not access_token:
+            logger.error("[STK Push Failed] Unable to retrieve M-Pesa Access Token.")
             return {'success': False, 'message': 'Access token error'}
 
         # 🛡️ Safaricom expects a specific timestamp format in Nairobi time
@@ -79,25 +82,34 @@ class SubscriptionBilling:
             phone = '254' + phone
             
         if len(phone) != 12:
+            logger.warning(f"[STK Push Aborted] Invalid phone number format: {raw_phone} -> {phone}")
             return {'success': False, 'message': 'Invalid phone number format. Use 07... or 254...'}
 
+        # Ensure AccountReference is included and PartyB is correctly assigned
+        account_ref = store.name[:12].replace(" ", "") if store.name else "Subscription"
+
         payload = {
-            "BusinessShortCode": self.shortcode,
+            "BusinessShortCode": str(self.shortcode),
             "Password": password,
             "Timestamp": timestamp,
-            "TransactionType": "CustomerBuyGoodsOnline", # 🛡️ Updated to Buy Goods (Till)
+            "TransactionType": "CustomerBuyGoodsOnline",  # Use CustomerPayBillOnline if 4357255 is Paybill
             "Amount": int(amount if amount is not None else store.plan_price),
             "PartyA": phone,
-            "PartyB": self.shortcode,
+            "PartyB": str(self.shortcode),  # Note: Must be Head Office / Store Till number
             "PhoneNumber": phone,
             "CallBackURL": f"{settings.SITE_URL}/api/v1/billing/callback/",
-            "TransactionDesc": f"{store.name} Monthly Subscription"
+            "AccountReference": account_ref,  # 🚨 MANDATORY FIELD (Max 12 chars)
+            "TransactionDesc": f"{store.name} Monthly Subscription"[:13]
         }
 
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json"
         }
+
+        # 🔍 Debug Log: Inspect outgoing payload & config parameters
+        logger.debug(f"[STK Push Config] Base URL: {self.base_url} | Is Production: {self.is_production}")
+        logger.info(f"[STK Push Payload] Sending request to {self.stk_push_url}: {payload}")
 
         try:
             # 🛡️ PCI DSS 4.1: Certificate-pinned session for all M-Pesa API calls
@@ -108,17 +120,25 @@ class SubscriptionBilling:
                     headers=headers,
                     timeout=20
                 )
+                # 🔍 Debug Log: Log raw Safaricom response
+            logger.info(f"[STK Push Response] HTTP {response.status_code} | Raw Body: {response.text}")
+
             response.raise_for_status()
             result = response.json()
             if result.get("ResponseCode") == "0":
+                logger.info(f"[STK Push Success] CheckoutRequestID: {result.get('CheckoutRequestID')}")
                 return {
                     "success": True,
                     "message": result.get("CustomerMessage", "STK push initiated"),
                     "checkout_request_id": result.get("CheckoutRequestID"),
                 }
+            logger.warning(f"[STK Push Rejected] Response Description: {result.get('ResponseDescription')}")
             return {"success": False, "message": result.get("ResponseDescription")}
         except Exception as e:
-            logger.exception("Subscription STK Push failed")
+            if 'response' in locals() and response is not None:
+                logger.error(f"[STK Push Exception] HTTP {response.status_code} Error: {response.text}", exc_info=True)
+            else:
+                logger.error(f"[STK Push Exception] Request failed without response: {str(e)}", exc_info=True)
             return {"success": False, "message": str(e)}
 
     def query_stk_status(self, checkout_request_id):
