@@ -468,6 +468,10 @@ def notify_new_order(order):
             from .tasks import send_telegram_notification_task
             send_telegram_notification_task.delay(order.store.telegram_chat_id, message)
 
+        # 🛡️ Rider Radar: Notify nearby riders
+        from .tasks import notify_nearby_riders_task
+        notify_nearby_riders_task.delay(order.id)
+
         # Also send to global admins
         from .tasks import send_telegram_message_task
         return send_telegram_message_task.delay(message, buttons=buttons)
@@ -504,6 +508,10 @@ Status: Ready for delivery 🚀
     if order.store and order.store.telegram_chat_id:
         from .tasks import send_telegram_notification_task
         send_telegram_notification_task.delay(order.store.telegram_chat_id, message)
+
+    # 🛡️ Rider Radar: Notify nearby riders
+    from .tasks import notify_nearby_riders_task
+    notify_nearby_riders_task.delay(order.id)
 
     from .tasks import send_telegram_message_task
     return send_telegram_message_task.delay(message)

@@ -719,3 +719,58 @@ def notify_new_arrival_task(food_item_id):
     except Exception as e:
         logger.exception(f"Error in notify_new_arrival_task for item {food_item_id}: {e}")
         return 0
+
+@shared_task
+def notify_nearby_riders_task(order_id):
+    """
+    🛡️ Rider Radar: Find and notify available riders within 10km of the store.
+    """
+    from .models import Order, User, RiderLocationPing
+    from .utils import haversine_distance_km
+    try:
+        order = Order.objects.select_related('store').get(id=order_id)
+        if not order.store or not order.store.latitude or not order.store.longitude:
+            return 0
+        
+        # 🕒 Get riders who pinged in the last 15 minutes
+        cutoff = timezone.now() - timedelta(minutes=15)
+        
+        # We need the LATEST ping for each available rider
+        # Efficient query for large ping sets:
+        recent_riders = User.objects.filter(
+            role='rider',
+            is_available=True,
+            location_pings__created_at__gt=cutoff
+        ).distinct()
+        
+        notified_count = 0
+        for rider in recent_riders:
+            last_ping = RiderLocationPing.objects.filter(
+                rider=rider,
+                created_at__gt=cutoff
+            ).order_by('-created_at').first()
+            
+            if not last_ping:
+                continue
+                
+            distance = haversine_distance_km(
+                order.store.latitude, order.store.longitude,
+                last_ping.latitude, last_ping.longitude
+            )
+            
+            if distance <= 10.0:  # 🎯 10km Radius
+                send_lifecycle_notification_task.delay(
+                    rider.id,
+                    "New Order Nearby! 🚴‍♂️",
+                    f"A new order was placed at {order.store.name}. Open the app to accept!",
+                    {'type': 'nearby_order', 'order_id': str(order.id), 'distance': f"{distance:.1f}km"}
+                )
+                notified_count += 1
+                
+        logger.info(f"Rider Radar: Notified {notified_count} riders for order {order.order_number}")
+        return notified_count
+    except Order.DoesNotExist:
+        return 0
+    except Exception as e:
+        logger.exception(f"Error in notify_nearby_riders_task: {e}")
+        return 0
