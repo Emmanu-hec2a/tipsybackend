@@ -204,9 +204,11 @@ def send_fcm_notification(user, title, body, data=None):
         response = messaging.send(message)
         logger.info(f"Successfully sent FCM message to user {user.id}: {response}")
         return True
-    except messaging.ApiCallError as e:
-        logger.error(f"FCM API Error for user {user.id}: {e.code} - {e.message}")
-        if e.code == 'UNREGISTERED':
+    except firebase_admin.exceptions.FirebaseError as e:
+        # 🛡️ Safe Error Handling: messaging.ApiCallError was removed in recent SDKs
+        # We catch the base FirebaseError and check for 'UNREGISTERED' code
+        logger.error(f"FCM API Error for user {user.id}: {e.code} - {str(e)}")
+        if e.code == 'UNREGISTERED' or e.code == 'NOT_FOUND':
             # Clean up stale token
             user.fcm_token = None
             user.save(update_fields=['fcm_token'])

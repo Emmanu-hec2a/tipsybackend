@@ -65,6 +65,23 @@ def dispatch_outbox_events(limit=100):
         process_outbox_event.delay(event_id)
     return len(event_ids)
 
+@shared_task
+def flush_stuck_outbox_events(minutes=30):
+    """
+    🛡️ Recovery: Resets PENDING events older than 30m to RETRY to force redelivery.
+    """
+    from django.db.models import Q
+    cutoff = timezone.now() - timedelta(minutes=minutes)
+    stuck = OutboxEvent.objects.filter(
+        status=OutboxEvent.Status.PENDING,
+        created_at__lt=cutoff
+    )
+    count = stuck.count()
+    if count > 0:
+        stuck.update(status=OutboxEvent.Status.RETRY, next_attempt_at=timezone.now())
+        logger.info(f"🛡️ Outbox Recovery: Flushed {count} stuck events to RETRY")
+    return count
+
 
 @shared_task
 def process_outbox_event(event_id):
@@ -193,6 +210,17 @@ def send_telegram_notification_task(chat_id, message, bot_type='merchant'):
         return send_telegram_notification(chat_id, message, bot_type)
     except Exception as e:
         logger.error(f"Error in send_telegram_notification_task: {e}")
+        return False
+
+@shared_task
+def send_telegram_message_task(message, buttons=None, bot_type='admin'):
+    """
+    🛡️ Global Admin Alert Task: Dispatches message to all chat IDs in TELEGRAM_CHATT_IDS.
+    """
+    try:
+        return send_telegram_message(message, buttons=buttons, bot_type=bot_type)
+    except Exception as e:
+        logger.error(f"Error in send_telegram_message_task: {e}")
         return False
 
 @shared_task
@@ -644,3 +672,50 @@ def send_daily_promotion_blasts():
 
     logger.info("send_daily_promotion_blasts: queued %s promo blast(s)", queued)
     return queued
+
+@shared_task
+def notify_new_arrival_task(food_item_id):
+    """
+    🛡️ Tipsy Discovery: Notify past customers of a store when a new item is added.
+    Only targets users who have successfully placed an order from this specific store.
+    """
+    from .models import FoodItem, User, Order
+    try:
+        item = FoodItem.objects.select_related('store').get(id=food_item_id)
+        store = item.store
+        
+        # 🎯 TARGETING: Customers who have ordered from this store
+        customer_ids = Order.objects.filter(
+            store=store,
+            status__in=['delivered', 'confirmed', 'assigned', 'picked_up', 'arrived']
+        ).values_list('user_id', flat=True).distinct()
+        
+        # Filter for users with valid FCM tokens
+        eligible_users = User.objects.filter(
+            id__in=customer_ids,
+            fcm_token__isnull=False
+        ).exclude(fcm_token='')
+        
+        count = 0
+        for user in eligible_users:
+            send_lifecycle_notification_task.delay(
+                user.id,
+                f"New Arrival at {store.name}! 🥂",
+                f"Check out our new {item.name}. Order now!",
+                {
+                    'type': 'new_arrival',
+                    'store_id': str(store.id),
+                    'food_id': str(item.id),
+                    'store_name': store.name
+                }
+            )
+            count += 1
+            
+        logger.info(f"notify_new_arrival_task: Queued {count} notifications for item {item.name}")
+        return count
+    except FoodItem.DoesNotExist:
+        logger.error(f"notify_new_arrival_task: Item {food_item_id} not found")
+        return 0
+    except Exception as e:
+        logger.exception(f"Error in notify_new_arrival_task for item {food_item_id}: {e}")
+        return 0
