@@ -108,10 +108,15 @@ class ReconciliationService:
 
     @classmethod
     def _maybe_manual_review(cls, attempt):
-        if timezone.now() - attempt.created_at >= cls.MANUAL_REVIEW_AFTER:
+        # 🛡️ SHIRIKI SPEED-OUT: Shiriki payments time out faster to unblock the pot (10 mins vs 45 mins)
+        shiriki_timeout = timedelta(minutes=10)
+        is_shiriki = bool(attempt.shiriki_contribution_id)
+        timeout_threshold = shiriki_timeout if is_shiriki else cls.MANUAL_REVIEW_AFTER
+
+        if timezone.now() - attempt.created_at >= timeout_threshold:
             updated = PaymentAttempt.objects.filter(pk=attempt.pk, status=PaymentAttempt.Status.PENDING).update(
                 status=PaymentAttempt.Status.MANUAL_REVIEW,
-                manual_review_reason='Provider remained pending beyond reconciliation SLA.',
+                manual_review_reason=f'Provider remained pending beyond {"Shiriki" if is_shiriki else "standard"} reconciliation SLA.',
             )
             if updated and attempt.order_id:
                 from .inventory_service import InventoryReservationService

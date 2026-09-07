@@ -276,10 +276,13 @@ class CustomerOrderListView(generics.ListAPIView):
     permission_classes = [IsCustomer]
 
     def get_queryset(self):
-        # 🛡️ SHIRIKI GUARD: Include orders where user is host OR participant
+        # 🛡️ SHIRIKI HIDE: Only show orders in history if they aren't part of an active Shiriki session.
+        # This prevents the "Payment Pending" confusion while a pot is still being filled.
         return Order.objects.filter(
             Q(user=self.request.user) | 
             Q(shiriki_session__contributions__user=self.request.user, shiriki_session__contributions__status='confirmed')
+        ).exclude(
+            shiriki_session__status='active'
         ).distinct().order_by('-created_at')
 
 class CustomerOrderDetailView(generics.RetrieveAPIView):

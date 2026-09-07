@@ -29,6 +29,11 @@ class ShirikiService:
             )
             if ShirikiSession.objects.filter(order_id=order.pk).exists():
                 raise ShirikiSessionConflict('Shiriki session already exists for this order')
+            
+            # 🛡️ SESSION WALL: Prevent host from having two active pots at once
+            if ShirikiSession.objects.filter(host_id=host_id, status='active').exists():
+                raise ShirikiSessionConflict('You already have an active Shiriki pot. Please complete or cancel it before starting a new one.')
+
             for _ in range(cls.INVITE_CODE_ATTEMPTS):
                 code = 'TT-' + ''.join(
                     random.choices(string.ascii_uppercase + string.digits, k=6)
