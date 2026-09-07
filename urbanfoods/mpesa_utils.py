@@ -190,18 +190,23 @@ class MpesaIntegration:
         timestamp = timezone.localtime(timezone.now()).strftime('%Y%m%d%H%M%S')
         password = self.generate_password(timestamp)
 
-        # Determine if it's Paybill or Till
-        # Simple heuristic: if shortcode is 5-6 digits, likely Paybill. If 7 digits, likely Till.
-        # But Daraja API expects BusinessShortCode and PartyB to be the same for STK.
+        # Determine Transaction Type and PartyB from Store config
+        transaction_type = "CustomerPayBillOnline"
+        party_b = self.shortcode
+        
+        if self.store:
+            transaction_type = self.store.mpesa_transaction_type
+            if transaction_type == "CustomerBuyGoodsOnline":
+                party_b = self.store.mpesa_till_number or self.shortcode
         
         payload = {
             "BusinessShortCode": self.shortcode,
             "Password": password,
             "Timestamp": timestamp,
-            "TransactionType": "CustomerPayBillOnline", # Works for both Paybill and Till in many cases
+            "TransactionType": transaction_type,
             "Amount": int(Decimal(str(amount))),
             "PartyA": daraja_phone,
-            "PartyB": self.shortcode,
+            "PartyB": party_b,
             "PhoneNumber": daraja_phone,
             "CallBackURL": self.callback_url,
             "AccountReference": account_reference[:12],

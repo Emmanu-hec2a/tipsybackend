@@ -240,6 +240,15 @@ class Store(models.Model):
     mpesa_callback_url = models.URLField(null=True, blank=True, help_text="Store-specific callback URL")
 
     telegram_chat_id = models.CharField(max_length=100, null=True, blank=True)
+    mpesa_transaction_type = models.CharField(
+        max_length=30, 
+        default='CustomerPayBillOnline',
+        choices=[
+            ('CustomerPayBillOnline', 'Paybill'),
+            ('CustomerBuyGoodsOnline', 'Till/Buy Goods'),
+        ]
+    )
+    mpesa_till_number = models.CharField(max_length=20, null=True, blank=True, help_text="Required for Buy Goods transactions")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
