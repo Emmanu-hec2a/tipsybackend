@@ -271,8 +271,12 @@ class StoreAdmin(ModelAdmin):
         ('Operations', {'fields': ('opening_time', 'closing_time', 'latitude', 'longitude', 'delivery_fee', 'delivery_radius_km')}),
         ('Branding', {'fields': ('shop_name', 'logo', 'cover_image', 'primary_color', 'secondary_color', 'tagline', 'custom_domain')}),
         ('M-Pesa Daraja Credentials', {
-            'fields': ('mpesa_shortcode', 'mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_passkey', 'mpesa_callback_url'),
-            'description': 'Sensitive credentials will be encrypted automatically on save.'
+            'fields': (
+                'mpesa_transaction_type', 'mpesa_shortcode', 'mpesa_till_number',
+                'mpesa_consumer_key', 'mpesa_consumer_secret', 'mpesa_passkey', 
+                'mpesa_callback_url'
+            ),
+            'description': 'Configure Paybill or Till/Buy Goods details. Sensitive credentials will be encrypted automatically on save.'
         }),
         ('Billing', {'fields': ('plan', 'plan_price', 'subscription_active', 'subscription_expires', 'billing_status', 'last_payment_date')}),
     )
