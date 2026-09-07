@@ -67,6 +67,11 @@ customer_patterns = [
     path('shiriki/create/', api_v1_customer_views.ShirikiCreateView.as_view(), name='shiriki_create'),
     path('shiriki/session/<str:invite_code>/', api_v1_customer_views.ShirikiSessionDetailView.as_view(), name='shiriki_detail'),
     path('shiriki/contribute/', api_v1_customer_views.ShirikiContributeView.as_view(), name='shiriki_contribute'),
+    
+    # 🛡️ Tipsy Support
+    path('support/tickets/', api_v1_customer_views.CreateSupportTicketView.as_view(), name='support_ticket_create'),
+    path('support/tickets/<int:pk>/', api_v1_customer_views.SupportTicketDetailView.as_view(), name='support_ticket_detail'),
+    path('support/tickets/<int:ticket_id>/message/', api_v1_customer_views.AddSupportMessageView.as_view(), name='support_ticket_message'),
 ]
 
 auth_patterns = [

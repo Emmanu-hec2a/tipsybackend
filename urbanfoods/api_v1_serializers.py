@@ -6,7 +6,7 @@ from .models import (
     User, Store, Order, OrderItem, FoodItem, Rating, RiderEarning, 
     FoodCategory, Promotion, SubscriptionPayment, SavedAddress, 
     RiderLocationPing, ChatMessage, ShirikiSession, ShirikiContribution,
-    RiderWeeklyStat, PanicAlert
+    RiderWeeklyStat, PanicAlert, SupportTicket, SupportMessage
 )
 from django.db.models import Sum
 from .mpesa_utils import encrypt_value
@@ -719,3 +719,21 @@ class PanicAlertSerializer(serializers.ModelSerializer):
         model = PanicAlert
         fields = '__all__'
         read_only_fields = ['rider', 'timestamp', 'is_resolved', 'resolved_at']
+
+class SupportMessageSerializer(serializers.ModelSerializer):
+    sender_name = serializers.ReadOnlyField(source='sender.username')
+
+    class Meta:
+        model = SupportMessage
+        fields = ['id', 'ticket', 'sender', 'sender_name', 'message', 'is_admin_reply', 'created_at']
+        read_only_fields = ['sender', 'is_admin_reply']
+
+class SupportTicketSerializer(serializers.ModelSerializer):
+    messages = SupportMessageSerializer(many=True, read_only=True)
+    user_name = serializers.ReadOnlyField(source='user.username')
+    order_number = serializers.ReadOnlyField(source='order.order_number')
+
+    class Meta:
+        model = SupportTicket
+        fields = ['id', 'user', 'user_name', 'order', 'order_number', 'category', 'subject', 'description', 'status', 'messages', 'created_at', 'updated_at']
+        read_only_fields = ['user', 'status']

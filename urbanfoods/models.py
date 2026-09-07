@@ -1359,3 +1359,72 @@ class FraudIncident(models.Model):
         if notes:
             self.investigation_notes = f"{self.investigation_notes}\n\nResolution: {notes}"
         self.save()
+
+class SupportTicket(models.Model):
+    """
+    🛡️ Tipsy Support: Track and manage customer support requests in-app.
+    """
+    class Status(models.TextChoices):
+        OPEN = 'open', 'Open'
+        IN_PROGRESS = 'in_progress', 'In Progress'
+        RESOLVED = 'resolved', 'Resolved'
+
+    class Category(models.TextChoices):
+        LATE_DELIVERY = 'late_delivery', 'Late Delivery'
+        WRONG_ITEMS = 'wrong_items', 'Wrong/Missing Items'
+        PAYMENT_ISSUE = 'payment_issue', 'Payment/Billing Issue'
+        APP_BUG = 'app_bug', 'App/Technical Bug'
+        OTHER = 'other', 'Other'
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='support_tickets')
+    order = models.ForeignKey('Order', on_delete=models.SET_NULL, null=True, blank=True, related_name='support_tickets')
+    category = models.CharField(max_length=30, choices=Category.choices, default=Category.OTHER)
+    subject = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'created_at'], name='support_status_created_idx'),
+        ]
+
+    def __str__(self):
+        return f"Ticket #{self.id} - {self.category} ({self.user.username})"
+
+class SupportMessage(models.Model):
+    """
+    🛡️ Tipsy Support: Individual messages within a support ticket.
+    """
+    ticket = models.ForeignKey(SupportTicket, on_delete=models.CASCADE, related_name='messages')
+    sender = models.ForeignKey(User, on_delete=models.CASCADE)
+    message = models.TextField()
+    is_admin_reply = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"Msg on Ticket #{self.ticket_id} by {self.sender.username}"
+
+    def save(self, *args, **kwargs):
+        is_new = not self.pk
+        super().save(*args, **kwargs)
+        
+        if is_new and self.is_admin_reply:
+            # 🛡️ Link notification: Notify customer of admin's response
+            from .utils import send_fcm_notification
+            send_fcm_notification(
+                user=self.ticket.user,
+                title="Tipsy Support 💬",
+                body=self.message[:100],
+                data={
+                    'type': 'support_chat',
+                    'ticket_id': str(self.ticket.id),
+                    'order_id': str(self.ticket.order.id) if self.ticket.order else "0",
+                    'order_number': self.ticket.order.order_number if self.ticket.order else "N/A"
+                }
+            )

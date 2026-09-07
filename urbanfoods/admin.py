@@ -351,3 +351,25 @@ class SiteSettingsAdmin(ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         """Prevent deletion of the singleton"""
         return False
+
+class SupportMessageInline(admin.TabularInline):
+    model = SupportMessage
+    extra = 1
+    readonly_fields = ['created_at']
+
+@admin.register(SupportTicket)
+class SupportTicketAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'category', 'status', 'created_at']
+    list_filter = ['status', 'category', 'created_at']
+    search_fields = ['user__username', 'subject', 'description']
+    readonly_fields = ['created_at', 'updated_at']
+    inlines = [SupportMessageInline]
+
+    def save_formset(self, request, form, formset, change):
+        instances = formset.save(commit=False)
+        for instance in instances:
+            if isinstance(instance, SupportMessage) and not instance.pk:
+                instance.is_admin_reply = True
+                instance.sender = request.user
+            instance.save()
+        formset.save_m2m()

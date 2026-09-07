@@ -1115,3 +1115,83 @@ class ShirikiContributeView(APIView):
             'checkout_request_id': attempt.checkout_request_id,
             'idempotency_key': attempt.idempotency_key,
         })
+
+class CreateSupportTicketView(APIView):
+    """
+    🛡️ Tipsy Support: Create a new support ticket and notify admins.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from .models import SupportTicket, Order
+        from .api_v1_serializers import SupportTicketSerializer
+        from .utils import send_telegram_message
+        
+        serializer = SupportTicketSerializer(data=request.data)
+        if serializer.is_valid():
+            ticket = serializer.save(user=request.user)
+            
+            # 🤖 Notify Admins via Telegram
+            order_info = f" (Order #{ticket.order.order_number})" if ticket.order else ""
+            message = (
+                f"🚨 <b>NEW SUPPORT TICKET</b>\n\n"
+                f"👤 <b>User:</b> {ticket.user.username}\n"
+                f"🏷️ <b>Category:</b> {ticket.get_category_display()}\n"
+                f"📝 <b>Subject:</b> {ticket.subject}\n"
+                f"{order_info}\n\n"
+                f"Please resolve in Admin Panel."
+            )
+            from .tasks import send_telegram_message_task
+            send_telegram_message_task.delay(message)
+            
+            # 🛡️ Link notification: Notify customer that ticket is created
+            from .utils import send_fcm_notification
+            send_fcm_notification(
+                user=request.user,
+                title="Support Ticket Created 🎟️",
+                body=f"We've received your request about {ticket.get_category_display()}. Our team will get back to you shortly.",
+                data={
+                    'type': 'support_chat',
+                    'ticket_id': str(ticket.id),
+                    'order_id': str(ticket.order.id) if ticket.order else "0",
+                    'order_number': ticket.order.order_number if ticket.order else "N/A"
+                }
+            )
+            
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class SupportTicketDetailView(generics.RetrieveAPIView):
+    """
+    🛡️ Tipsy Support: View a specific ticket and its messages.
+    """
+    from .api_v1_serializers import SupportTicketSerializer
+    serializer_class = SupportTicketSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return SupportTicket.objects.filter(user=self.request.user)
+
+class AddSupportMessageView(APIView):
+    """
+    🛡️ Tipsy Support: Reply to a ticket.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, ticket_id):
+        from .models import SupportTicket, SupportMessage
+        from .api_v1_serializers import SupportMessageSerializer
+        
+        ticket = get_object_or_404(SupportTicket, id=ticket_id, user=request.user)
+        if ticket.status == 'resolved':
+            return Response({'error': 'Cannot message on a resolved ticket.'}, status=400)
+            
+        serializer = SupportMessageSerializer(data=request.data)
+        if serializer.is_valid():
+            msg = serializer.save(ticket=ticket, sender=request.user)
+            
+            # 🛡️ Link notification: If admin replies, notify customer
+            # (Admins reply through the Django Admin Panel, which uses the model save)
+            # This endpoint is for customer replies.
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
