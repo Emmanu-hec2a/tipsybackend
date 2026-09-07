@@ -252,26 +252,50 @@ def check_abandoned_carts():
 
 @shared_task
 def check_expired_shiriki_sessions():
+    """
+    🛡️ Tipsy Resilience: Automatically clean up abandoned pots and protect funds.
+    """
+    from .models import ShirikiSession, WalletLedger
+    from .ledger_service import FinancialLedgerService
+    
     now = timezone.now()
     expired_sessions = ShirikiSession.objects.filter(status='active', expires_at__lt=now)
     count = 0
     for session in expired_sessions:
         try:
             with transaction.atomic():
+                # 🛡️ Atomic lock to prevent final payment from racing with expiry
+                session = ShirikiSession.objects.select_for_update().get(pk=session.pk)
+                if session.status != 'active':
+                    continue
+
                 session.status = 'expired'
-                session.save()
+                session.save(update_fields=['status'])
+                
+                # 💰 Fund Protection: Refund confirmed contributions to user wallets
                 contributions = session.contributions.filter(status='confirmed')
                 for contrib in contributions:
-                    user = contrib.user
-                    user.wallet_balance += contrib.amount
-                    user.save()
+                    # Use central Ledger Service for audit trail
+                    FinancialLedgerService.wallet_entry(
+                        user_id=contrib.user_id,
+                        entry_type=WalletLedger.EntryType.CREDIT,
+                        amount=contrib.amount,
+                        reference_type='shiriki_refund',
+                        reference_id=contrib.id,
+                        idempotency_key=f'shiriki-refund-{contrib.id}'
+                    )
                     contrib.status = 'refunded'
-                    contrib.save()
-                session.order.status = 'cancelled'
-                session.order.save()
+                    contrib.save(update_fields=['status'])
+                
+                # Release master order
+                if session.order:
+                    session.order.status = 'cancelled'
+                    session.order.save(update_fields=['status'])
+                    
                 count += 1
+                logger.info(f"🛡️ Shiriki Expiry: Session {session.invite_code} expired. {contributions.count()} users refunded.")
         except Exception as e:
-            logger.error(f"Failed to process expiry for Shiriki Session {session.invite_code}: {e}")
+            logger.error(f"❌ Failed to process expiry for Shiriki Session {session.invite_code}: {e}")
     return f"Processed {count} sessions"
 
 @shared_task
