@@ -478,15 +478,22 @@ class OrderChatMessagesView(generics.ListCreateAPIView):
         )
         
         if not is_authorized:
-            logger.warning(f"Unauthorized chat attempt by user {self.request.user.id} for order {order_id}")
+            logger.error(f"❌ Chat Auth Failure: User {self.request.user.id} ({self.request.user.role}) is NOT authorized for Order {order_id}. "
+                         f"Order Owner: {order.user_id}, Assigned Rider: {order.assigned_rider_id}")
             raise permissions.PermissionDenied("You are not authorized to message on this order.")
 
         # Business Rule: Customer cannot message if no rider is assigned yet
         if self.request.user.role == 'customer' and order.assigned_rider is None:
+            logger.warning(f"⚠️ Chat Block: Customer {self.request.user.id} tried to message Order {order_id} with NO RIDER assigned.")
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'error': 'no_rider', 'message': 'No rider assigned to this order yet.'})
 
-        msg = serializer.save(order=order, sender=self.request.user)
+        try:
+            msg = serializer.save(order=order, sender=self.request.user)
+            logger.info(f"✅ Chat Success: Message saved for Order {order_id} by User {self.request.user.id}")
+        except Exception as e:
+            logger.exception(f"🔥 Chat Save Error for Order {order_id}: {e}")
+            raise
         
         # Trigger FCM Notification to the other party
         # If customer sends, notify rider. If rider sends, notify customer.
