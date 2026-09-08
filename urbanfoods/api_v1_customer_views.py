@@ -477,9 +477,13 @@ class OrderChatMessagesView(generics.ListCreateAPIView):
             (order.store and self.request.user == order.store.owner)
         )
         
+        # 🛡️ DIAGNOSTIC: Log full context for chat failures
+        logger.info(f"💬 Chat Attempt: User={self.request.user.id} ({self.request.user.role}), "
+                    f"Order={order_id}, Auth={is_authorized}, Rider={order.assigned_rider_id}")
+        
         if not is_authorized:
-            logger.error(f"❌ Chat Auth Failure: User {self.request.user.id} ({self.request.user.role}) is NOT authorized for Order {order_id}. "
-                         f"Order Owner: {order.user_id}, Assigned Rider: {order.assigned_rider_id}")
+            logger.error(f"❌ Chat Auth Failure: User {self.request.user.id} is NOT authorized for Order {order_id}. "
+                         f"Owner: {order.user_id}, Rider: {order.assigned_rider_id}")
             raise permissions.PermissionDenied("You are not authorized to message on this order.")
 
         # Business Rule: Customer cannot message if no rider is assigned yet

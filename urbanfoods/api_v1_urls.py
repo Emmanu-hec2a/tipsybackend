@@ -67,6 +67,9 @@ customer_patterns = [
     path('shiriki/create/', api_v1_customer_views.ShirikiCreateView.as_view(), name='shiriki_create'),
     path('shiriki/session/<str:invite_code>/', api_v1_customer_views.ShirikiSessionDetailView.as_view(), name='shiriki_detail'),
     path('shiriki/contribute/', api_v1_customer_views.ShirikiContributeView.as_view(), name='shiriki_contribute'),
+    
+    # 🛡️ Chat Endpoints (Mirrored here to match app's dynamic pathing)
+    path('orders/<int:order_id>/chat/', api_v1_customer_views.OrderChatMessagesView.as_view(), name='customer_order_chat'),
 ]
 
 auth_patterns = [
@@ -98,6 +101,9 @@ rider_patterns = [
     path('payouts/<int:pk>/dispute/', api_v1_rider_views.RiderPayoutDisputeView.as_view(), name='rider_payout_dispute'),
     path('panic/', api_v1_rider_views.RiderPanicAlertView.as_view(), name='rider_panic_alert'),
     path('report-issue/', api_v1_rider_views.RiderReportIssueView.as_view(), name='rider_report_issue'),
+    
+    # 🛡️ Chat Endpoints (Mirrored for Rider access)
+    path('orders/<int:order_id>/chat/', api_v1_customer_views.OrderChatMessagesView.as_view(), name='rider_order_chat'),
 ]
 
 superadmin_patterns = [
