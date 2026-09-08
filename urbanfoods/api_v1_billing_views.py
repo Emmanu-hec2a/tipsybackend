@@ -15,9 +15,12 @@ from .payment_initiation import InitiatePaymentService, PaymentInitiationConflic
 from .payment_throttles import PaymentAttemptThrottle
 from .views import safaricom_ip_required
 from django.views.decorators.csrf import csrf_exempt
+from django.http import HttpResponse
+from django.template.loader import get_template
+from xhtml2pdf import pisa
+import io
 import json
 import logging
-import os
 import os
 
 logger = logging.getLogger(__name__)
@@ -201,12 +204,19 @@ class PartnerPaymentAttemptStatusView(PartnerStoreMixin, APIView):
             'updated_at': (attempt.confirmed_at or attempt.failed_at or attempt.expired_at or attempt.created_at).isoformat(),
         })
 
-class SubscriptionHistoryView(APIView):
+class SubscriptionHistoryView(PartnerStoreMixin, APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        user = request.user
-        payments = SubscriptionPayment.objects.filter(store__owner=user).order_by('-created_at')
+        store = self.get_store(request)
+        if not store:
+            return Response({'error': 'Store context required'}, status=400)
+            
+        # 🛡️ Hardening: Return only subscription-type payments for the ACTIVE store
+        payments = SubscriptionPayment.objects.filter(
+            store=store,
+            payment_type='subscription'
+        ).order_by('-created_at')
         data = [{
             'id': p.id,
             'amount': str(p.amount),
@@ -215,6 +225,60 @@ class SubscriptionHistoryView(APIView):
             'created_at': p.created_at.isoformat()
         } for p in payments]
         return Response(data)
+
+class SubscriptionInvoiceView(PartnerStoreMixin, APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, pk):
+        store = self.get_store(request)
+        if not store:
+            return Response({'error': 'Store context required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            payment = SubscriptionPayment.objects.get(pk=pk, store=store)
+            
+            # 🛡️ Only confirmed payments should have invoices
+            if payment.status != 'success':
+                return Response({'error': 'Invoice is only available for successful payments.', 'status': payment.status}, status=status.HTTP_400_BAD_REQUEST)
+                
+            template = get_template('invoices/subscription_receipt.html')
+            
+            # 🛡️ Hardening: Safe logo URL resolution
+            logo_url = None
+            if store.logo:
+                try:
+                    logo_url = request.build_absolute_uri(store.logo.url)
+                except Exception:
+                    logger.warning(f"Failed to build absolute URI for store {store.id} logo")
+
+            context = {
+                'payment': payment,
+                'store': store,
+                'date': timezone.localtime(payment.created_at).strftime('%d %b, %Y'),
+                'logo_url': logo_url,
+            }
+            
+            html = template.render(context)
+            result = io.BytesIO()
+            pdf = pisa.pisaDocument(io.BytesIO(html.encode("UTF-8")), result)
+            
+            if not pdf.err:
+                response = HttpResponse(result.getvalue(), content_type='application/pdf')
+                response['Content-Disposition'] = f'attachment; filename="receipt_{payment.mpesa_receipt or payment.id}.pdf"'
+                return response
+            
+            logger.error(f"PDF Generation Error for Subscription Receipt {pk}")
+            return Response({'error': 'PDF generation failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+        except SubscriptionPayment.DoesNotExist:
+            logger.error(f"Subscription Invoice 404: Payment {pk} not found for store {store.id}")
+            return Response({
+                'error': 'Payment record not found', 
+                'details': f'Payment ID {pk} does not exist in the context of Store {store.id}'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.exception(f"Unexpected error in SubscriptionInvoiceView for ID {pk}")
+            return Response({'error': 'An internal server error occurred.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class DowngradeToFreeView(PartnerStoreMixin, APIView):
     permission_classes = [permissions.IsAuthenticated]

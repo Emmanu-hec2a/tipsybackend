@@ -708,6 +708,7 @@ class ShirikiSessionSerializer(serializers.ModelSerializer):
 
 class RiderWeeklyStatSerializer(serializers.ModelSerializer):
     rider_name = serializers.ReadOnlyField(source='rider.get_full_name')
+    rider_phone = serializers.ReadOnlyField(source='rider.phone')
     store_name = serializers.ReadOnlyField(source='store.name')
     
     class Meta:

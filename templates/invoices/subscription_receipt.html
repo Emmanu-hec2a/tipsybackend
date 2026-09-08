@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: 'Helvetica', 'Arial', sans-serif; color: #333; margin: 0; padding: 40px; }
+        .header { text-align: center; margin-bottom: 50px; border-bottom: 2px solid #f0f0f0; padding-bottom: 20px; }
+        .logo { max-width: 150px; margin-bottom: 15px; }
+        .invoice-title { font-size: 28px; font-weight: 900; text-transform: uppercase; letter-spacing: 2px; color: #000; }
+        .details-grid { width: 100%; margin-bottom: 40px; }
+        .details-grid td { vertical-align: top; width: 50%; }
+        .label { font-size: 10px; font-weight: bold; color: #999; text-transform: uppercase; margin-bottom: 5px; }
+        .value { font-size: 14px; font-weight: bold; }
+        .payment-table { width: 100%; border-collapse: collapse; margin-top: 30px; }
+        .payment-table th { background-color: #f9f9f9; padding: 12px; text-align: left; font-size: 10px; text-transform: uppercase; color: #666; border-bottom: 1px solid #eee; }
+        .payment-table td { padding: 15px 12px; border-bottom: 1px solid #eee; font-size: 13px; }
+        .amount-row { background-color: #000; color: #fff; }
+        .amount-row td { font-weight: bold; font-size: 16px; border: none; padding: 20px 12px; }
+        .footer { margin-top: 60px; text-align: center; font-size: 10px; color: #999; }
+        .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: bold; text-transform: uppercase; background: #e6f7ed; color: #0e7043; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        {% if logo_url %}
+            <img src="{{ logo_url }}" class="logo">
+        {% endif %}
+        <div class="invoice-title">Subscription Receipt</div>
+        <div style="font-size: 12px; color: #666; margin-top: 5px;">TipsyTheoryy Merchant Network</div>
+    </div>
+
+    <table class="details-grid">
+        <tr>
+            <td>
+                <div class="label">Billed To</div>
+                <div class="value">{{ store.name }}</div>
+                <div style="font-size: 12px; color: #666;">{{ store.owner.get_full_name }}</div>
+                <div style="font-size: 12px; color: #666;">{{ store.owner.phone }}</div>
+            </td>
+            <td style="text-align: right;">
+                <div class="label">Receipt Details</div>
+                <div class="value">Date: {{ date }}</div>
+                <div class="value">M-Pesa Ref: {{ payment.mpesa_receipt|default:"N/A" }}</div>
+                <div class="badge">Paid Successfully</div>
+            </td>
+        </tr>
+    </table>
+
+    <table class="payment-table">
+        <thead>
+            <tr>
+                <th>Item Description</th>
+                <th>Plan Tier</th>
+                <th style="text-align: right;">Amount</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>TipsyTheoryy Merchant Subscription</td>
+                <td style="text-transform: uppercase; font-weight: bold;">{{ payment.plan }}</td>
+                <td style="text-align: right;">KSh {{ payment.amount }}</td>
+            </tr>
+            <tr class="amount-row">
+                <td colspan="2">Total Amount Paid</td>
+                <td style="text-align: right;">KSh {{ payment.amount }}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="footer">
+        <p>Thank you for being a part of TipsyTheoryy network. This is a computer-generated receipt.</p>
+        <p>Support: support@s.tipsytheoryy.com | +254 718 258 821</p>
+    </div>
+</body>
+</html>

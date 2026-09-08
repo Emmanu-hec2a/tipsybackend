@@ -629,16 +629,27 @@ class CreateBranchView(PartnerBaseView, APIView):
 class OrderInvoiceView(PartnerBaseView, APIView):
     def get(self, request, pk):
         store = self.get_store(request)
+        if not store:
+             return Response({'error': 'Store context required. Ensure X-Store-ID header is present.'}, status=status.HTTP_400_BAD_REQUEST)
+             
         try:
             order = Order.objects.get(pk=pk, store=store)
             template = get_template('invoices/invoice_template.html')
             
+            # 🛡️ Hardening: Safe logo URL resolution
+            logo_url = None
+            if store.logo:
+                try:
+                    logo_url = request.build_absolute_uri(store.logo.url)
+                except Exception:
+                    logger.warning(f"Failed to build absolute URI for store {store.id} logo")
+
             context = {
                 'order': order,
                 'store': store,
                 'items': order.items.all(),
-                'logo_url': request.build_absolute_uri(store.logo.url) if store.logo else None,
-                'date': timezone.localtime(timezone.now()).strftime('%d %b, %Y')
+                'logo_url': logo_url,
+                'date': timezone.localtime(order.created_at).strftime('%d %b, %Y')
             }
             
             html = template.render(context)
@@ -649,10 +660,15 @@ class OrderInvoiceView(PartnerBaseView, APIView):
                 response = HttpResponse(result.getvalue(), content_type='application/pdf')
                 response['Content-Disposition'] = f'attachment; filename="invoice_{order.order_number}.pdf"'
                 return response
-            return Response({'error': 'PDF generation failed'}, status=400)
+            
+            logger.error(f"PDF Generation Error for Order {pk}")
+            return Response({'error': 'PDF generation failed'}, status=500)
             
         except Order.DoesNotExist:
             return Response({'error': 'Order not found'}, status=404)
+        except Exception as e:
+            logger.exception(f"Unexpected error in OrderInvoiceView for Order {pk}")
+            return Response({'error': 'An internal server error occurred while generating the invoice.'}, status=500)
 
 class NearbyRidersView(PartnerBaseView, APIView):
     def get(self, request):
