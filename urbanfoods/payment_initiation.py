@@ -119,8 +119,23 @@ class InitiatePaymentService:
 
             target_key = getattr(locked_target, 'payment_idempotency_key', None)
             if target_key and target_key != idempotency_key:
-                raise PaymentInitiationConflict('Payment target is already bound to another request.')
-            if hasattr(locked_target, 'payment_idempotency_key') and not target_key:
+                # 🛡️ Hardening: If target is bound to a different key, check if that key has ACTIVE attempts.
+                # If the bound key has only terminal attempts (FAILED/EXPIRED), we allow re-binding.
+                active_bound_attempt = query.filter(
+                    idempotency_key=target_key,
+                    status__in=cls.ACTIVE_STATUSES
+                ).exists()
+
+                if active_bound_attempt:
+                    logger.warning(f"Payment Conflict: Target {locked_target.pk} is already bound to ACTIVE key {target_key}")
+                    raise PaymentInitiationConflict('Payment target is already bound to an active request.')
+                
+                # Re-bind to the new key since the old one is no longer active
+                logger.info(f"Re-binding target {locked_target.pk} from stale key {target_key} to new key {idempotency_key}")
+                locked_target.payment_idempotency_key = idempotency_key
+                locked_target.save(update_fields=['payment_idempotency_key'])
+
+            if not target_key:
                 locked_target.payment_idempotency_key = idempotency_key
                 locked_target.save(update_fields=['payment_idempotency_key'])
 
