@@ -118,8 +118,8 @@ def process_outbox_event(event_id):
                 logger.exception('notify_shiriki_progress_task failed for event %s', event_id)
             try:
                 send_lifecycle_notification_task.run(
-                    event.payload['contributor_id'], 'Contribution Confirmed ✅',
-                    f"Your KSh {event.payload['amount']} contribution to the pot was confirmed.",
+                    event.payload['contributor_id'], 'Shiriki Contribution 🥂',
+                    f"Yay! Your KSh {event.payload['amount']} contribution to the pot was confirmed.",
                     {
                         'type': 'shiriki_contribution_confirmed',
                         'session_id': event.payload['session_id'],
